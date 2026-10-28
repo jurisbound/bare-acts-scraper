@@ -1,0 +1,38 @@
+# India Code state and UT names (as India Code writes them) with their number of Acts, 13 Oct 2026.
+# The workflow runs one job per line; use these exact names with --state.
+Andaman and Nicobar Islands	70
+Andhra Pradesh	256
+Arunachal Pradesh	149
+Assam	1128
+Bihar	334
+Chandigarh	257
+Chhattisgarh	523
+Dadra and Nagar Haveli and Daman and Diu	228
+Delhi	142
+Goa	184
+Gujarat	246
+Haryana	271
+Himachal Pradesh	271
+Jammu and Kashmir	132
+Jharkhand	161
+Karnataka	353
+Kerala	597
+Ladakh	64
+Lakshadweep	3
+Madhya Pradesh	269
+Maharashtra	461
+Manipur	224
+Meghalaya	109
+Mizoram	114
+Nagaland	246
+Odisha	343
+Puducherry	104
+Punjab	354
+Rajasthan	477
+Sikkim	126
+Tamil Nadu	404
+Telangana	293
+Tripura	131
+Uttar Pradesh	424
+Uttarakhand	279
+West Bengal	802

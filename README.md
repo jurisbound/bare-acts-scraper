@@ -1,0 +1,70 @@
+# JurisBound – Bare Acts scraper
+
+Collects India's Acts from **India Code** (`https://indiacode.gov.in`), the Government of India's official repository, into the JurisBound database and storage. It runs on GitHub Actions: once a month by itself, and by hand for State Acts.
+
+It **only collects**: the Act record, its section records (when India Code has them) and its English PDF. Everything that needs the PDF's text is done afterwards by the JurisBound court pipeline (`acts_cli.py text`, `acts_cli.py index`):
+
+- reading the text (direct read; OCR only for scanned pages);
+- cutting sections out of the PDF when India Code gives no section records;
+- chapters, schedules and forms, and the "As on" date;
+- the search index.
+
+## What is collected
+
+| India Code list | Acts (13 Oct 2026) | Collected |
+|---|---|---|
+| Central Acts | 848 (830 with section records) | all, monthly |
+| Repealed central Acts | 4,632 | only IPC, CrPC and the Indian Evidence Act (`bare-acts/repealed.txt`); the rest later if wanted |
+| State and UT Acts (36) | 10,529 | by hand, per state (`bare-acts/states.txt`), after the section cutting is tested |
+
+- **A State's copy of a central Act** is kept as that state's own Act (its own code and JurisBound number, shown under the state). It never replaces the central Act, because a state copy can carry state amendments.
+- **Section text:** India Code's section records are the text; the PDF never replaces them. Acts without records get their sections from the PDF in the pipeline.
+
+## How a run works
+
+- **One Act at a time**, with a two-second pause between requests to India Code. One Act is one database transaction.
+- **Unchanged Acts are skipped without a download.** India Code lists a fingerprint of each stored PDF, so the monthly run only downloads new or amended Acts.
+- **A changed Act** is saved as a new dated copy and marked for the pipeline. It keeps its JurisBound number (`JB-ACT-CEN-2023-0000001`, `JB-ACT-TS-…`), which the database gives.
+- **An Act no longer listed** after a full run gets `source_missing_since` (usually repealed). Nothing is deleted.
+
+Every Act of every run is written to `bare_act_load_log` with the status `loaded`, `unchanged`, `mismatch` or `failed`.
+
+## Workflow: `.github/workflows/bare-acts.yml`
+
+| Trigger | What runs |
+|---|---|
+| Monthly, the 2nd at 02:00 IST | all central Acts, then the repealed Acts in `repealed.txt` |
+| Run workflow, `what = central` | all central Acts (optional `limit`, `dry_run`) |
+| Run workflow, `what = repealed` | the Acts in `repealed.txt` |
+| Run workflow, `what = states` | `states = all` or names from `states.txt` (comma separated); one job per state, 3 at a time |
+
+**Secrets:**
+- `AZURE_KB_DATABASE_URL`: Azure Postgres, login `jb_court`, schema `jb_kb`.
+- `AZURE_STORAGE_CONNECTION_STRING`: the PDFs go to the container `court-documents` under `acts/…`.
+
+## Run on a computer
+
+```
+pip install -r bare-acts/requirements.txt
+cp .env.example .env            # fill in the two settings
+cd bare-acts
+python load.py --titles-file sample_acts.txt --dry-run       # read and count only, save nothing
+python load.py --all-central                                 # all central Acts
+python load.py --repealed "The Indian Penal Code, 45 of 1860"
+python load.py --state Telangana --limit 10
+```
+
+## Folders
+
+| Folder | What |
+|---|---|
+| `bare-acts/` | the scraper: `india_code.py` (India Code's data service), `jb_db.py` (database and storage), `load.py` (the command) |
+| `storage/` | the shared storage module (Azure Blob Storage, or S3) |
+| `database/` | the Bare Acts tables as created on Azure (for reference; the live database already has them) |
+
+## Known limits
+
+- **CrPC:** India Code's PDF is a poor scan, so its sections cannot be cut yet. The Act and its PDF are saved; it needs a cleaner PDF.
+- **State Acts:** most have no section records, and each state prints differently. In an earlier test of 15 State Acts, sections were cut reliably for only some. The cutting is being improved before all states are loaded.
+- **Older PDFs print no "As on" date.** The download date is kept in the database but is not shown to users.
+- **Rules, notifications and circulars** made under an Act are not collected.

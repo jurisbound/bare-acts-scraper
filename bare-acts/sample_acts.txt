@@ -1,0 +1,11 @@
+# Ten central Acts used to test the loader (exact titles as on India Code).
+The Bharatiya Nyaya Sanhita, 2023
+The Bharatiya Nagarik Suraksha Sanhita, 2023
+The Bharatiya Sakshya Adhiniyam, 2023
+The Code of Civil Procedure, 1908
+The Negotiable Instruments Act, 1881
+The Consumer Protection Act, 2019
+The Limitation Act, 1963
+The Indian Contract Act, 1872
+The Transfer of Property Act, 1882
+The Protection of Children from Sexual Offences Act, 2012
