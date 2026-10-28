@@ -69,7 +69,7 @@ python load.py --state Telangana --limit 10
 | What | State |
 |---|---|
 | Central Acts | all 848 collected on 28 Oct (first run from a laptop). The pipeline's `text` and `index` steps still have to run for them |
-| Repealed central Acts | IPC and the Evidence Act collected, cut and indexed. CrPC is collected but has no sections (poor scan). A full dry run over all ~4,632 was started on 28 Oct (read only); the first real load is the next Sunday run |
+| Repealed central Acts | IPC, the Evidence Act and CrPC collected and cut (CrPC from India Code's clean Tripura copy). IPC and the Evidence Act indexed. A full dry run over all ~4,632 was started on 28 Oct (read only); the first real load is the next Sunday run |
 | State Acts | not loaded. A Telangana dry run (2 Acts) passed on GitHub |
 | Workflow | weekly schedule on; Run workflow tested (repealed and Telangana dry runs green) |
 
@@ -81,7 +81,7 @@ python load.py --state Telangana --limit 10
    - run the pipeline's `text` step;
    - check the cut sections against the PDFs and improve the cutting (an earlier test cut only 6 of 15 reliably);
    - then add the states to the weekly schedule and load all 36. Their text and index steps (thousands of PDFs, some needing OCR) should run in the planned Azure pipeline job.
-3. **CrPC:** find a cleaner PDF.
+3. ~~CrPC: find a cleaner PDF~~ — done 29 Oct: India Code's Tripura copy of the central text is used (all 534 sections). The Wealth-tax Act 1957 has no cleaner copy.
 4. **IPC:** fix the s.4 and s.13 headings, which are cut wrongly. Also one duplicate CPC rule.
 5. **Old → new law table:** a draft from the official BPR&D correspondence tables (BNS↔IPC, BNSS↔CrPC, BSA↔Evidence Act), built on the website's side (`court-backend`, Legal data lists). The JurisBound legal team checks it once.
 6. **Friendlier Act codes:** new Acts get codes like `A2017-23`; only the first samples have BNS, CPC… They work, but the page addresses are not friendly.
@@ -91,7 +91,7 @@ The full JurisBound pending list (website and backend) is in `court-backend/PLAT
 
 ## Known limits
 
-- **CrPC:** India Code's PDF is a poor scan, so its sections cannot be cut yet. The Act and its PDF are saved; it needs a cleaner PDF.
+- **CrPC:** India Code's repealed-list PDF is a poor scan; the saved copy uses India Code's Tripura copy of the same central text instead. A forced reload (`--force`) would bring the poor scan back.
 - **State Acts:** most have no section records, and each state prints differently. In an earlier test of 15 State Acts, sections were cut reliably for only some. The cutting is being improved before all states are loaded.
 - **Older PDFs print no "As on" date.** The download date is kept in the database but is not shown to users.
 - **Rules, notifications and circulars** made under an Act are not collected.
