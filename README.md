@@ -64,6 +64,31 @@ python load.py --state Telangana --limit 10
 | `storage/` | the shared storage module (Azure Blob Storage, or S3) |
 | `database/` | the Bare Acts tables as created on Azure (for reference; the live database already has them) |
 
+## Status (28 October 2026)
+
+| What | State |
+|---|---|
+| Central Acts | all 848 collected on 28 Oct (first run from a laptop). The pipeline's `text` and `index` steps still have to run for them |
+| Repealed central Acts | IPC and the Evidence Act collected, cut and indexed. CrPC is collected but has no sections (poor scan). A full dry run over all ~4,632 was started on 28 Oct (read only); the first real load is the next Sunday run |
+| State Acts | not loaded. A Telangana dry run (2 Acts) passed on GitHub |
+| Workflow | weekly schedule on; Run workflow tested (repealed and Telangana dry runs green) |
+
+## Pending
+
+1. **Repealed dry run:** check its `FAILED` lines (titles the reader can't parse) and fix them before the first real load.
+2. **State Acts plan:**
+   - run about 10 Acts each from Telangana, Andhra Pradesh and two more states (Run workflow → `states`, `limit = 10`);
+   - run the pipeline's `text` step;
+   - check the cut sections against the PDFs and improve the cutting (an earlier test cut only 6 of 15 reliably);
+   - then add the states to the weekly schedule and load all 36. Their text and index steps (thousands of PDFs, some needing OCR) should run in the planned Azure pipeline job.
+3. **CrPC:** find a cleaner PDF.
+4. **IPC:** fix the s.4 and s.13 headings, which are cut wrongly. Also one duplicate CPC rule.
+5. **Old → new law table:** a draft from the official BPR&D correspondence tables (BNS↔IPC, BNSS↔CrPC, BSA↔Evidence Act), built on the website's side (`court-backend`, Legal data lists). The JurisBound legal team checks it once.
+6. **Friendlier Act codes:** new Acts get codes like `A2017-23`; only the first samples have BNS, CPC… They work, but the page addresses are not friendly.
+7. **Later, if JurisBound wants them:** India Code's Rules, Notifications, Circulars, Regulations and Orders under each Act.
+
+The full JurisBound pending list (website and backend) is in `court-backend/PLATFORM.md` (private repository).
+
 ## Known limits
 
 - **CrPC:** India Code's PDF is a poor scan, so its sections cannot be cut yet. The Act and its PDF are saved; it needs a cleaner PDF.
