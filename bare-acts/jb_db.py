@@ -233,6 +233,48 @@ def existing_version(cur, source_act_id: str) -> Optional[dict]:
     return {"id": row[0], "as_on": row[1], "sha": row[2], "pdf_path": row[3], "checksum": row[4]} if row else None
 
 
+def central_act_by_number(cur, number: int, year: int) -> Optional[dict]:
+    """The central Act with this number and year that we hold from India Code's list of Acts
+    (not one of the repealed-list rows), if any."""
+    cur.execute(
+        """select id, code, status, replaced_by_code from bare_acts
+            where jurisdiction = 'central' and act_number = %s and act_year = %s
+              and coalesce(source_act_id, '') not like 'REPEAL:%%' limit 1""", (number, year))
+    row = cur.fetchone()
+    return {"id": row[0], "code": row[1], "status": row[2], "replaced_by": row[3]} if row else None
+
+
+def code_for_act(cur, number: int, year: int) -> Optional[str]:
+    """The short code of the central Act with this number and year, if we hold it."""
+    if (number, year) in SHORT_CODES:
+        return SHORT_CODES[(number, year)]
+    cur.execute("select code from bare_acts where jurisdiction = 'central' and act_number = %s and act_year = %s "
+                "order by (status = 'repealed') limit 1", (number, year))
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def mark_repealed(cur, act_id: str, replaced_by: Optional[str], note: str) -> None:
+    """An Act we hold is now on India Code's repealed list: the same row changes status. It keeps
+    its JurisBound number, its sections and everything users saved."""
+    cur.execute("""update bare_acts set status = 'repealed', replaced_by_code = coalesce(%s, replaced_by_code),
+                          enforcement_note = %s, updated_at = now() where id = %s""", (replaced_by, note, act_id))
+
+
+def link_repealing_acts(cur) -> int:
+    """Repealed Acts whose repealing Act was not held when they were saved: link them now.
+    The repealing Act is read from the note "Repealed by Act N of YYYY"."""
+    cur.execute(r"""
+        update bare_acts r set replaced_by_code = n.code, updated_at = now()
+          from bare_acts n
+         where r.status = 'repealed' and r.replaced_by_code is null
+           and r.enforcement_note ~ '^Repealed by Act \d+ of \d{4}'
+           and n.jurisdiction = 'central' and n.id <> r.id
+           and n.act_number = (regexp_match(r.enforcement_note, '^Repealed by Act (\d+) of'))[1]::int
+           and n.act_year = (regexp_match(r.enforcement_note, ' of (\d{4})'))[1]::int""")
+    return cur.rowcount
+
+
 def remember_checksum(cur, version_id: str, checksum: Optional[str]) -> None:
     cur.execute("update bare_act_versions set source_checksum = %s where id = %s", (checksum, version_id))
 

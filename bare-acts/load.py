@@ -4,7 +4,8 @@
     python load.py --titles-file sample_acts.txt                    a list of central Acts
     python load.py --all-central --limit 20                         central Acts, first 20
     python load.py --state "Telangana" --limit 5                    a state's own Acts, first 5
-    python load.py --repealed "The Indian Penal Code, 45 of 1860"   an Act from the Centre's repealed list
+    python load.py --repealed "The Indian Penal Code, 45 of 1860"   one Act from the Centre's repealed list
+    python load.py --all-repealed                                  every Act in the Centre's repealed list
     python load.py ... --dry-run                                    read and count only; saves nothing
     python load.py ... --force                                      collect again even if the PDF has not changed
 
@@ -26,6 +27,7 @@ One Act is one database transaction: an Act that fails leaves nothing half-saved
 from __future__ import annotations
 
 import argparse
+import html
 import re
 import sys
 import uuid
@@ -116,35 +118,72 @@ def section_rows(groups: dict) -> list[dict]:
     return rows
 
 
-_REPEALED_TITLE = re.compile(r"^(?P<name>.*?),?\s*(?P<no>\d+)\s+of\s+(?P<year>\d{4})\s*,?\s*\(\s*Rep\.,?\s*(?:Act\s*)?(?P<by_no>\d+)\s+of\s+(?P<by_year>\d{4})", re.I)
+# A repealed Act's title in India Code carries everything known about it, in many shapes:
+#   "The Indian Penal Code, 45 of 1860 (Rep., Act 45 of 2023)"
+#   "Police Presidency towns (amending Act 13 of 1856), 1860, 48 of 1860 (Repealed (in Bombay), Bom. Act 4 of 1902 …)"
+#   "The Central Provinces Courts Act, 1865, 14 of 1865 (Repealed (as to Oudh), Act 32 of 1871 Repealed (…), Act, 16 of 1885)"
+# The Act's own number and year are the LAST "N of YYYY" before the repeal note; the repealing central
+# Act is the last "Act N of YYYY" in the note that is not a provincial Act ("Bom. Act 4 of 1902").
+_REPEAL_START = re.compile(r"\(\s*Rep(?:ealed)?\b", re.I)
+_NO_OF_YEAR = re.compile(r"(\d{1,4})\s+of\s+(\d{4})\b", re.I)
+_PROVINCIAL = re.compile(r"\b(?:Bom|Ben|Beng|Bengal|Bombay|Mad|Madras|Pun|Punj|Bih|Bihar|Ori|Orissa|Assam|Raj|Guj|Mah|Mys|Ker|Hyd|"
+                         r"Sind|Bur|Burma|Oudh|U\.\s?P|C\.\s?P|E\.\s?B|W\.\s?B|A\.\s?P|T\.\s?N|M\.\s?P)\.?\s*,?\s*(?:Act\s*,?\s*)?(?:No\.?\s*)?$", re.I)
 
 
 def repealed_details(item: dict) -> dict:
-    """A repealed Act's record has only a title, such as
-    "The Indian Penal Code, 45 of 1860 (Rep., Act 45 of 2023)". Everything known is read from it."""
-    m = _REPEALED_TITLE.match(item["name"])
-    if not m:
+    """Name, number, year and the repealing Act, read from a repealed Act's title."""
+    raw = re.sub(r"\s+", " ", html.unescape(item["name"])).strip().strip("\"'")
+    start = _REPEAL_START.search(raw)
+    head, tail = (raw[:start.start()], raw[start.start():]) if start else (raw, "")
+    own = list(_NO_OF_YEAR.finditer(head))
+    if not own:
         raise RuntimeError(f"cannot read the Act number and year from the title: {item['name']}")
-    name = m.group("name").strip().rstrip(",")
-    number, year = int(m.group("no")), int(m.group("year"))
+    number, year = int(own[-1].group(1)), int(own[-1].group(2))
+    name = head[:own[-1].start()].strip(" ,;:")
+    if name.startswith("(") and name.count("(") > name.count(")"):       # a stray "(" in India Code's title
+        name = name[1:].strip()
     named_year = re.search(r",?\s*(\d{4})$", name)                 # "The Code of Criminal Procedure 1973"
     if named_year:
-        name = re.sub(r",?\s*\d{4}$", "", name) + f", {named_year.group(1)}"
+        name = re.sub(r",?\s*\d{4}$", "", name).strip(" ,") + f", {named_year.group(1)}"
     else:
         name = f"{name}, {year}"
-    by = (int(m.group("by_no")), int(m.group("by_year")))
-    return {"title": name, "number": number, "year": year, "replaced_by": jb_db.SHORT_CODES.get(by),
-            "note": f"Repealed by Act {by[0]} of {by[1]}"}
+    central = [m for m in _NO_OF_YEAR.finditer(tail) if not _PROVINCIAL.search(tail[max(0, m.start() - 16):m.start()])]
+    by = (int(central[-1].group(1)), int(central[-1].group(2))) if central else None
+    note = f"Repealed by Act {by[0]} of {by[1]}" if by else "Repealed: " + tail.strip("() ")[:300] if tail else "Repealed"
+    return {"title": name, "number": number, "year": year, "by": by, "replaced_by": None, "note": note}
 
 
 def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
     repealed = act.get("_repealed")
-    old = repealed_details(act) if repealed else None
-    title = old["title"] if old else act["name"]
+    title = act["name"]
     # a repealed record has no India Code act id; its record id identifies it
     act_id_src = f"REPEAL:{act['uuid']}" if repealed else ic.field(act, "act_id")
     entry = {"source_act_id": act_id_src, "act_title": title, "started_at": datetime.now()}
     try:
+        old = repealed_details(act) if repealed else None      # a title it cannot read fails this Act only
+        if old:
+            title = entry["act_title"] = old["title"]
+            with con.cursor() as cur:
+                # the repealing Act (BNS for IPC, …) when we hold it; otherwise linked later (link_repealing_acts)
+                old["replaced_by"] = jb_db.code_for_act(cur, *old["by"]) if old["by"] else None
+                held = jb_db.central_act_by_number(cur, old["number"], old["year"])
+            if held:
+                # an Act we hold from the list of Acts in force, now repealed: the same row changes status
+                # (keeps its JurisBound number, sections and saved items); no second row, no download
+                if held["status"] == "repealed" and (old["replaced_by"] is None or held["replaced_by"] == old["replaced_by"]):
+                    if not dry_run:
+                        with con, con.cursor() as cur:
+                            jb_db.log(cur, run_id, {**entry, "act_id": held["id"], "status": "unchanged",
+                                                    "note": "held as repealed"})
+                    print(f"  unchanged  {title} (held as repealed)")
+                    return "unchanged"
+                print(f"  repealed   {title}: the Act we hold is now marked repealed ({old['note']})")
+                if not dry_run:
+                    with con, con.cursor() as cur:
+                        jb_db.mark_repealed(cur, held["id"], old["replaced_by"], old["note"])
+                        jb_db.log(cur, run_id, {**entry, "act_id": held["id"], "status": "loaded",
+                                                "note": f"now repealed: {old['note']}"})
+                return "loaded"
         files = ic.act_files(act["uuid"])
         chosen = pick_english_pdf(files)
         if not chosen:
@@ -168,11 +207,6 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
             with con, con.cursor() as cur:
                 jb_db.remember_checksum(cur, saved["id"], chosen.get("checksum"))
                 jb_db.log(cur, run_id, {**entry, "status": "unchanged", "note": "same PDF as the saved copy"})
-            print(f"  unchanged  {title}")
-            return "unchanged"
-            if not dry_run:
-                with con, con.cursor() as cur:
-                    jb_db.log(cur, run_id, {**entry, "status": "unchanged", "note": "same PDF as the saved copy"})
             print(f"  unchanged  {title}")
             return "unchanged"
 
@@ -248,6 +282,8 @@ def main() -> int:
     ap.add_argument("--repealed", action="append", default=[],
                     help='a repealed central Act, by the start of its India Code title, '
                          'e.g. "The Indian Penal Code, 45 of 1860" (repeatable)')
+    ap.add_argument("--all-repealed", action="store_true",
+                    help="every Act in the Centre's repealed list (already saved ones are skipped without a download)")
     ap.add_argument("--limit", type=int, help="stop after this many Acts")
     ap.add_argument("--dry-run", action="store_true", help="read and count only; save nothing")
     ap.add_argument("--force", action="store_true", help="collect again even when the PDF has not changed")
@@ -257,8 +293,8 @@ def main() -> int:
     if args.titles_file:
         with open(args.titles_file, encoding="utf-8") as f:
             titles += [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
-    if not titles and not args.all_central and not args.repealed and not args.state:
-        ap.error("give --title, --titles-file, --all-central, --state or --repealed")
+    if not titles and not args.all_central and not args.repealed and not args.all_repealed and not args.state:
+        ap.error("give --title, --titles-file, --all-central, --all-repealed, --state or --repealed")
 
     acts = []
     whole_lists: list[tuple[str, Optional[str], set[str]]] = []      # lists read in full this run
@@ -287,6 +323,8 @@ def main() -> int:
             acts.append({**item, "_repealed": True})
         else:
             print(f"  NOT FOUND  {t} (no repealed central Act whose title starts like this)")
+    if args.all_repealed:          # after the Acts in force, so an Act held from that list is recognised
+        acts += [{**item, "_repealed": True} for item in ic.repealed_acts()]
     if args.limit and not args.state:
         acts = acts[:args.limit]
 
@@ -304,6 +342,10 @@ def main() -> int:
             for t in gone:
                 print(f"  NO LONGER ON INDIA CODE  {t}")
             counts["no longer listed"] = counts.get("no longer listed", 0) + len(gone)
+        with con, con.cursor() as cur:
+            linked = jb_db.link_repealing_acts(cur)
+        if linked:
+            print(f"  linked {linked} repealed Acts to the Act that repealed them")
     con.close()
     print(f"done: {counts}")
     return 1 if counts.get("failed") else 0

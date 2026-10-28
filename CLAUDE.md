@@ -7,5 +7,5 @@ JurisBound's Bare Acts scraper: collects Acts from India Code (indiacode.gov.in)
 - Keep India Code's two-second pause and one request at a time; at most 3 state jobs in parallel.
 - Never delete an Act row: a reload with `--force` keeps its JurisBound number. A missing Act only gets `source_missing_since`.
 - India Code section records are the section text; never replace them with PDF text.
-- Decisions (28 Oct 2026): state copies of central Acts stay as that state's own Act; only IPC, CrPC and the Evidence Act from the repealed list for now; states are loaded after the section cutting is tested.
+- Decisions (28 Oct 2026): state copies of central Acts stay as that state's own Act; all repealed central Acts are collected (weekly with the central Acts; a newly repealed Act updates the row we hold); states are loaded after the section cutting is tested. Weekly schedule (client wants weekly).
 - Secrets live in GitHub (`AZURE_KB_DATABASE_URL`, `AZURE_STORAGE_CONNECTION_STRING`) or a local `.env`; never print or commit them.

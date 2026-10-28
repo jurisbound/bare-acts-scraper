@@ -121,6 +121,20 @@ def state_acts(state: str) -> Iterator[dict]:
             return
 
 
+def repealed_acts() -> Iterator[dict]:
+    """Every Act in the Centre's "Repeal Acts" list (about 4,630; a title and a PDF each)."""
+    scope = central_collection("Repeal Acts")
+    page = 0
+    while True:
+        result = _get(f"{BASE}/discover/search/objects", {"scope": scope, "size": PAGE_SIZE, "page": page,
+                                                         "sort": "dc.title,ASC"})["_embedded"]["searchResult"]
+        for obj in result.get("_embedded", {}).get("objects", []):
+            yield obj["_embedded"]["indexableObject"]
+        page += 1
+        if page >= result["page"]["totalPages"]:
+            return
+
+
 def find_repealed_act(title_start: str) -> Optional[dict]:
     """A repealed central Act, by the start of its title as India Code writes it,
     e.g. "The Indian Penal Code, 45 of 1860"."""

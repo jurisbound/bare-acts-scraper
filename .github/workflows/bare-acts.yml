@@ -5,9 +5,10 @@
 # cutting sections and the search index are done afterwards by the court pipeline
 # (`acts_cli.py text`, `acts_cli.py index`), not here.
 #
-# Monthly: every central Act and the repealed central Acts in bare-acts/repealed.txt are checked.
-# An Act whose PDF India Code has not replaced is logged "unchanged" without a download, so the
-# monthly run is short; only new or amended Acts are downloaded.
+# Weekly (Sunday night): every central Act, then every Act in the Centre's repealed list. An Act whose
+# PDF India Code has not replaced is logged "unchanged" without a download, so the weekly run is short;
+# only new or amended Acts are downloaded. An Act we hold that India Code moves to the repealed list
+# is marked repealed in place (same row, same JurisBound number).
 #
 # State Acts: started by hand (Run workflow, what = states). JurisBound decided (28 Oct 2026) to load
 # all states after the section cutting has been tested on a few states; one job per state, at most
@@ -17,11 +18,11 @@ name: JurisBound - Bare Acts (India Code)
 
 on:
   schedule:
-    - cron: "30 20 1 * *"          # the 2nd of every month, 02:00 IST (GitHub often starts it later)
+    - cron: "30 16 * * 0"          # Sundays 22:00 IST (GitHub often starts it later)
   workflow_dispatch:
     inputs:
       what:
-        description: "central = all central Acts; repealed = the Acts in bare-acts/repealed.txt; states = the states below"
+        description: "central = all central Acts; repealed = all repealed central Acts; states = the states below"
         required: true
         default: central
         type: choice
@@ -80,26 +81,23 @@ jobs:
     # after the central job on the monthly run; on its own when started by hand
     if: always() && (github.event_name == 'schedule' || github.event.inputs.what == 'repealed')
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.11", cache: pip, cache-dependency-path: bare-acts/requirements.txt }
       - run: pip install -r bare-acts/requirements.txt
-      - name: Repealed central Acts
+      - name: Repealed central Acts (all; saved ones are skipped)
         working-directory: bare-acts
         env:
+          IN_LIMIT: ${{ github.event.inputs.limit }}
           IN_DRY: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
-          ARGS=""
-          [ "$IN_DRY" = "true" ] && ARGS="--dry-run"
-          status=0
-          while IFS= read -r title; do
-            case "$title" in ''|'#'*) continue ;; esac
-            echo "Running: python load.py --repealed \"$title\" $ARGS"
-            python load.py --repealed "$title" $ARGS || status=1
-          done < repealed.txt
-          exit $status
+          ARGS="--all-repealed"
+          [ -n "$IN_LIMIT" ] && ARGS="$ARGS --limit $IN_LIMIT"
+          [ "$IN_DRY" = "true" ] && ARGS="$ARGS --dry-run"
+          echo "Running: python load.py $ARGS"
+          python load.py $ARGS
 
   plan:
     if: github.event.inputs.what == 'states'
