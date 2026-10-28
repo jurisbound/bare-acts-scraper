@@ -1,6 +1,6 @@
 # JurisBound – Bare Acts scraper
 
-Collects India's Acts from **India Code** (`https://indiacode.gov.in`), the Government of India's official repository, into the JurisBound database and storage. It runs on GitHub Actions: every week by itself, and by hand (Run workflow) when needed.
+Collects India's Acts from **India Code** (`https://indiacode.gov.in`), the Government of India's official repository, into the JurisBound database and storage. It runs on GitHub Actions by itself (central Acts weekly, repealed Acts monthly), and by hand (Run workflow) when needed.
 
 It **only collects**: the Act record, its section records (when India Code has them) and its English PDF. Everything that needs the PDF's text is done afterwards by the JurisBound court pipeline (`acts_cli.py text`, `acts_cli.py index`):
 
@@ -14,7 +14,7 @@ It **only collects**: the Act record, its section records (when India Code has t
 | India Code list | Acts (13 Oct 2026) | Collected |
 |---|---|---|
 | Central Acts | 848 (830 with section records) | all, weekly |
-| Repealed central Acts | 4,632 | all, weekly (a title and a PDF each; sections are cut from the PDF in the pipeline) |
+| Repealed central Acts | 4,632 | all, monthly (a title and a PDF each; sections are cut from the PDF in the pipeline) |
 | State and UT Acts (36) | 10,529 | by hand, per state (`bare-acts/states.txt`), after the section cutting is tested |
 
 - **A State's copy of a central Act** is kept as that state's own Act (its own code and JurisBound number, shown under the state). It never replaces the central Act, because a state copy can carry state amendments.
@@ -23,7 +23,7 @@ It **only collects**: the Act record, its section records (when India Code has t
 ## How a run works
 
 - **One Act at a time**, with a two-second pause between requests to India Code. One Act is one database transaction.
-- **Unchanged Acts are skipped without a download.** India Code lists a fingerprint of each stored PDF, so the weekly run only downloads new or amended Acts.
+- **Unchanged Acts are skipped without a download.** India Code lists a fingerprint of each stored PDF, so a run only downloads new or amended Acts.
 - **A newly repealed Act** (India Code moves it from the Acts list to the repealed list) is marked repealed on the row we already hold: same JurisBound number, sections and saved items, no second copy.
 - **The repealing Act** is read from the repealed title ("Rep., Act 45 of 2023") and linked when we hold it; if it is loaded later, the link is made at the end of a later run.
 - **A changed Act** is saved as a new dated copy and marked for the pipeline. It keeps its JurisBound number (`JB-ACT-CEN-2023-0000001`, `JB-ACT-TS-…`), which the database gives.
@@ -35,7 +35,8 @@ Every Act of every run is written to `bare_act_load_log` with the status `loaded
 
 | Trigger | What runs |
 |---|---|
-| Weekly, Sundays 22:00 IST | all central Acts, then all repealed central Acts |
+| Weekly, Sundays 22:00 IST | all central Acts |
+| Monthly, the 2nd at 00:00 IST | all repealed central Acts |
 | Run workflow, `what = central` | all central Acts (optional `limit`, `dry_run`) |
 | Run workflow, `what = repealed` | all repealed central Acts (saved ones skipped) |
 | Run workflow, `what = states` | `states = all` or names from `states.txt` (comma separated); one job per state, 3 at a time |

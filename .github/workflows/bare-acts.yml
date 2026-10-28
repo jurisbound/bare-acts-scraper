@@ -5,10 +5,12 @@
 # cutting sections and the search index are done afterwards by the court pipeline
 # (`acts_cli.py text`, `acts_cli.py index`), not here.
 #
-# Weekly (Sunday night): every central Act, then every Act in the Centre's repealed list. An Act whose
-# PDF India Code has not replaced is logged "unchanged" without a download, so the weekly run is short;
-# only new or amended Acts are downloaded. An Act we hold that India Code moves to the repealed list
-# is marked repealed in place (same row, same JurisBound number).
+# Weekly (Sunday night): every central Act (about 30-60 minutes when nothing changed).
+# Monthly (the 2nd): every Act in the Centre's repealed list (about 4,630; 4-5 hours even when nothing
+# changed, because each Act's file list is read with India Code's 2-second pause; repealed Acts almost
+# never change). An Act whose PDF India Code has not replaced is logged "unchanged" without a download.
+# An Act we hold that India Code moves to the repealed list is noticed by the weekly run (it leaves the
+# list of Acts) and marked repealed in place by the monthly run (same row, same JurisBound number).
 #
 # State Acts: started by hand (Run workflow, what = states). JurisBound decided (28 Oct 2026) to load
 # all states after the section cutting has been tested on a few states; one job per state, at most
@@ -18,7 +20,8 @@ name: JurisBound - Bare Acts (India Code)
 
 on:
   schedule:
-    - cron: "30 16 * * 0"          # Sundays 22:00 IST (GitHub often starts it later)
+    - cron: "30 16 * * 0"          # weekly, Sundays 22:00 IST: central Acts (GitHub often starts it later)
+    - cron: "30 18 1 * *"          # monthly, the 2nd at 00:00 IST: repealed Acts
   workflow_dispatch:
     inputs:
       what:
@@ -55,7 +58,7 @@ env:
 
 jobs:
   central:
-    if: github.event_name == 'schedule' || github.event.inputs.what == 'central'
+    if: github.event.schedule == '30 16 * * 0' || github.event.inputs.what == 'central'
     runs-on: ubuntu-latest
     timeout-minutes: 355
     concurrency: { group: bare-acts-central, cancel-in-progress: false }
@@ -79,7 +82,7 @@ jobs:
   repealed:
     needs: [central]
     # after the central job on the monthly run; on its own when started by hand
-    if: always() && (github.event_name == 'schedule' || github.event.inputs.what == 'repealed')
+    if: always() && (github.event.schedule == '30 18 1 * *' || github.event.inputs.what == 'repealed')
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
