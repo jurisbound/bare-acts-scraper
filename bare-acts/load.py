@@ -6,6 +6,10 @@
     python load.py --state "Telangana" --limit 5                    a state's own Acts, first 5
     python load.py --repealed "The Indian Penal Code, 45 of 1860"   one Act from the Centre's repealed list
     python load.py --all-repealed                                  every Act in the Centre's repealed list
+    python load.py --gazette URL --act-number 30 --act-year 2025 --gazette-title "The Income-tax Act, 2025"
+                                                                    a new Act from the Gazette of India, before
+                                                                    India Code has it (India Code's copy takes
+                                                                    over the same Act when it appears)
     python load.py ... --dry-run                                    read and count only; saves nothing
     python load.py ... --force                                      collect again even if the PDF has not changed
 
@@ -32,6 +36,7 @@ import re
 import sys
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 from typing import Optional
 
 import india_code as ic
@@ -126,6 +131,10 @@ def section_rows(groups: dict) -> list[dict]:
 # Act is the last "Act N of YYYY" in the note that is not a provincial Act ("Bom. Act 4 of 1902").
 _REPEAL_START = re.compile(r"\(\s*Rep(?:ealed)?\b", re.I)
 _NO_OF_YEAR = re.compile(r"(\d{1,4})\s+of\s+(\d{4})\b", re.I)
+# the Act's own "N of YYYY" as India Code types it, typos included: "49of 1952", "12 o f 1947", "4 to 1900"
+_OWN_NO_OF_YEAR = re.compile(r"(\d{1,4})\s*(?:o\s?f|to)\s+(\d{4})\b", re.I)
+# no number in the title: India Code's file name usually has it ("A2021-33.pdf", "1878-8.pdf")
+_FILE_NO = re.compile(r"^A?(\d{4})-(\d{1,4})\.pdf$", re.I)
 _PROVINCIAL = re.compile(r"\b(?:Bom|Ben|Beng|Bengal|Bombay|Mad|Madras|Pun|Punj|Bih|Bihar|Ori|Orissa|Assam|Raj|Guj|Mah|Mys|Ker|Hyd|"
                          r"Sind|Bur|Burma|Oudh|U\.\s?P|C\.\s?P|E\.\s?B|W\.\s?B|A\.\s?P|T\.\s?N|M\.\s?P)\.?\s*,?\s*(?:Act\s*,?\s*)?(?:No\.?\s*)?$", re.I)
 
@@ -135,11 +144,18 @@ def repealed_details(item: dict) -> dict:
     raw = re.sub(r"\s+", " ", html.unescape(item["name"])).strip().strip("\"'")
     start = _REPEAL_START.search(raw)
     head, tail = (raw[:start.start()], raw[start.start():]) if start else (raw, "")
-    own = list(_NO_OF_YEAR.finditer(head))
-    if not own:
-        raise RuntimeError(f"cannot read the Act number and year from the title: {item['name']}")
-    number, year = int(own[-1].group(1)), int(own[-1].group(2))
-    name = head[:own[-1].start()].strip(" ,;:")
+    own = list(_OWN_NO_OF_YEAR.finditer(head))
+    if own:
+        number, year = int(own[-1].group(1)), int(own[-1].group(2))
+        name = head[:own[-1].start()].strip(" ,;:")
+    else:
+        # "The Sea Customs Act, 1878 (Rep., …)": the year only; the number comes from the file name
+        # (load_act), and an Act of the British Parliament has none ("Government of India Act, 1935")
+        years = list(re.finditer(r"\b(1[6-9]\d\d|20\d\d)\b", head))
+        if not years:
+            raise RuntimeError(f"cannot read the Act number and year from the title: {item['name']}")
+        number, year = None, int(years[-1].group(1))
+        name = head.strip(" ,;:")
     if name.startswith("(") and name.count("(") > name.count(")"):       # a stray "(" in India Code's title
         name = name[1:].strip()
     named_year = re.search(r",?\s*(\d{4})$", name)                 # "The Code of Criminal Procedure 1973"
@@ -150,7 +166,17 @@ def repealed_details(item: dict) -> dict:
     central = [m for m in _NO_OF_YEAR.finditer(tail) if not _PROVINCIAL.search(tail[max(0, m.start() - 16):m.start()])]
     by = (int(central[-1].group(1)), int(central[-1].group(2))) if central else None
     note = f"Repealed by Act {by[0]} of {by[1]}" if by else "Repealed: " + tail.strip("() ")[:300] if tail else "Repealed"
-    return {"title": name, "number": number, "year": year, "by": by, "replaced_by": None, "note": note}
+    return {"title": name, "number": number, "year": year, "by": by, "replaced_by": None, "note": note,
+            "says_repealed": bool(start)}
+
+
+def number_from_file(files: list[dict], year: int) -> Optional[int]:
+    """The Act number in India Code's file name ("A2021-33.pdf"), when it is for the same year."""
+    for f in files:
+        m = _FILE_NO.match(f.get("name") or "")
+        if m and int(m.group(1)) == year:
+            return int(m.group(2))
+    return None
 
 
 def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
@@ -161,12 +187,25 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
     entry = {"source_act_id": act_id_src, "act_title": title, "started_at": datetime.now()}
     try:
         old = repealed_details(act) if repealed else None      # a title it cannot read fails this Act only
+        files = None
+        if old and old["number"] is None:
+            files = ic.act_files(act["uuid"])
+            old["number"] = number_from_file(files, old["year"])
         if old:
             title = entry["act_title"] = old["title"]
             with con.cursor() as cur:
                 # the repealing Act (BNS for IPC, …) when we hold it; otherwise linked later (link_repealing_acts)
                 old["replaced_by"] = jb_db.code_for_act(cur, *old["by"]) if old["by"] else None
-                held = jb_db.central_act_by_number(cur, old["number"], old["year"])
+                held = jb_db.central_act_by_number(cur, old["number"], old["year"]) if old["number"] else None
+            if held and held["status"] != "repealed" and not old["says_repealed"]:
+                # India Code lists it among repealed Acts but its title has no repeal note
+                # ("The Tribunals Reforms Act, 2021", in force): the Act we hold is left as it is
+                if not dry_run:
+                    with con, con.cursor() as cur:
+                        jb_db.log(cur, run_id, {**entry, "act_id": held["id"], "status": "unchanged",
+                                                "note": "in India Code's repealed list without a repeal note; left in force"})
+                print(f"  unchanged  {title} (in the repealed list without a repeal note; left in force)")
+                return "unchanged"
             if held:
                 # an Act we hold from the list of Acts in force, now repealed: the same row changes status
                 # (keeps its JurisBound number, sections and saved items); no second row, no download
@@ -184,7 +223,7 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
                         jb_db.log(cur, run_id, {**entry, "act_id": held["id"], "status": "loaded",
                                                 "note": f"now repealed: {old['note']}"})
                 return "loaded"
-        files = ic.act_files(act["uuid"])
+        files = files if files is not None else ic.act_files(act["uuid"])
         chosen = pick_english_pdf(files)
         if not chosen:
             raise RuntimeError(f"no PDF among the Act's files: {[f['name'] for f in files]}")
@@ -237,6 +276,11 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
         if not same_copy:
             jb_db.upload_pdf(key, data)
         with con, con.cursor() as cur:
+            if not repealed and not state and not saved:
+                gz = jb_db.gazette_copy(cur, number, year)
+                if gz:
+                    notes.append(f"India Code's copy takes over {gz['code']}, loaded earlier from the Gazette of India")
+                    print(f"  takes over {gz['code']} ({gz['title']}), loaded earlier from the Gazette of India")
             act_row = jb_db.save_act(cur, {
                 "code": jb_db.act_code(number, year, state, act_id_src), "title": title, "act_number": number, "act_year": year,
                 "jurisdiction": "central" if not state else "state",
@@ -271,6 +315,112 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
         return "failed"
 
 
+def gazette_download(url: str) -> bytes:
+    """The Gazette PDF. egazette.gov.in sends its certificate without the issuer's (intermediate)
+    certificate, so a plain request cannot check it. The certificate names where its issuer's
+    certificate is published; that one is fetched and the site is checked against the usual
+    trusted authorities plus it. The check is never switched off."""
+    import ssl
+    import tempfile
+    from urllib.parse import urlparse
+
+    import certifi
+    import requests
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
+
+    try:
+        return ic.download(url)
+    except Exception as e:                       # India Code's request wraps the SSL error
+        if "CERTIFICATE_VERIFY_FAILED" not in str(e):
+            raise
+    host = urlparse(url).hostname
+    cert = x509.load_pem_x509_certificate(ssl.get_server_certificate((host, 443)).encode())
+    # follow "issuer published at" up the chain (a new root may itself be cross-signed by a trusted one)
+    chain, fetched_from = [], []
+    for _ in range(3):
+        try:
+            aia = cert.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_INFORMATION_ACCESS).value
+        except x509.ExtensionNotFound:
+            break
+        issuer_url = next((d.access_location.value for d in aia
+                           if d.access_method == AuthorityInformationAccessOID.CA_ISSUERS), None)
+        if not issuer_url:
+            break
+        der = requests.get(issuer_url, timeout=60).content
+        try:
+            cert = x509.load_der_x509_certificate(der)
+        except ValueError:
+            cert = x509.load_pem_x509_certificate(der)
+        chain.append(cert)
+        fetched_from.append(issuer_url)
+        if cert.issuer == cert.subject:
+            break                                 # a self-signed root: the chain ends here
+    with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False, encoding="ascii") as f:
+        f.write(Path(certifi.where()).read_text(encoding="ascii", errors="ignore"))
+        for c in chain:
+            f.write("\n" + c.public_bytes(Encoding.PEM).decode())
+        bundle = f.name
+    print(f"  note       {host} sends an incomplete certificate chain; its issuers' certificates were fetched "
+          f"from {', '.join(fetched_from)}")
+    r = requests.get(url, timeout=300, verify=bundle, headers={"User-Agent": ic.USER_AGENT})
+    r.raise_for_status()
+    return r.content
+
+
+def load_gazette(con, run_id: str, url: str, number: int, year: int, title: str, dry_run: bool, force: bool) -> str:
+    """A new central Act from its Gazette of India PDF, for an Act India Code does not have yet.
+    When India Code adds it (the weekly run), India Code's copy takes over this same Act."""
+    entry = {"source_act_id": f"GAZETTE:{year}-{number}", "act_title": title, "started_at": datetime.now()}
+    try:
+        with con.cursor() as cur:
+            held = jb_db.central_act_by_number(cur, number, year)
+            saved = jb_db.existing_version(cur, entry["source_act_id"])
+        if held and not jb_db.gazette_copy(con.cursor(), number, year):
+            print(f"  unchanged  {title}: India Code's copy is held ({held['code']}); the Gazette copy is not needed")
+            return "unchanged"
+        data = gazette_download(url)
+        if not data.startswith(b"%PDF"):
+            raise RuntimeError("the Gazette link did not give a PDF")
+        digest = jb_db.sha256(data)
+        if saved and saved["sha"] == digest and not force:
+            print(f"  unchanged  {title}")
+            return "unchanged"
+        print(f"  collected  {title} | Gazette of India | PDF {len(data) / 1e6:.1f} MB | "
+              "note: no section records; the pipeline cuts sections from the PDF (Gazette layout)")
+        if dry_run:
+            return "loaded"
+        same_copy = bool(saved and saved["sha"] == digest)
+        fetched = saved["as_on"] if same_copy else date.today()
+        key = saved["pdf_path"] if same_copy and saved.get("pdf_path") else jb_db.storage_key(None, year, number, title, fetched)
+        if not same_copy:
+            jb_db.upload_pdf(key, data)
+        with con, con.cursor() as cur:
+            act_row = jb_db.save_act(cur, {
+                "code": jb_db.act_code(number, year), "title": title, "act_number": number, "act_year": year,
+                "jurisdiction": "central", "status": "in_force", "source_url": url, "source": "gazette",
+                "source_act_id": entry["source_act_id"], "source_item_id": None, "state_name": None,
+                "ministry": None, "department": None, "long_title": None, "preamble": None, "enacted_on": None,
+                "enforcement_note": "From the Gazette of India; India Code's copy replaces it when India Code adds the Act",
+                "subject_type": None, "summary": None,
+            })
+            jb_db.save_version(cur, act_row, {
+                "as_on": fetched, "pdf_path": key, "pdf_sha256": digest, "source_pdf_url": url,
+                "section_count": 0, "sections_source": None, "source_checksum": None,
+            })
+            jb_db.log(cur, run_id, {**entry, "act_id": act_row, "status": "loaded", "pdf_saved": True,
+                                    "note": "from the Gazette of India; sections cut by the pipeline"})
+        return "loaded"
+    except Exception as e:
+        con.rollback()
+        print(f"  FAILED     {title}: {e}")
+        if not dry_run:
+            with con, con.cursor() as cur:
+                jb_db.log(cur, run_id, {**entry, "status": "failed", "note": str(e)[:1000]})
+        return "failed"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Collect bare acts from India Code.")
     ap.add_argument("--title", action="append", default=[], help="exact title of a central Act (repeatable)")
@@ -284,17 +434,35 @@ def main() -> int:
                          'e.g. "The Indian Penal Code, 45 of 1860" (repeatable)')
     ap.add_argument("--all-repealed", action="store_true",
                     help="every Act in the Centre's repealed list (already saved ones are skipped without a download)")
+    ap.add_argument("--gazette", metavar="PDF_URL",
+                    help="a new central Act from its Gazette of India PDF (India Code does not have it yet); "
+                         "needs --act-number, --act-year and --gazette-title")
+    ap.add_argument("--act-number", type=int, help="with --gazette: the Act's number (30 for Act 30 of 2025)")
+    ap.add_argument("--act-year", type=int, help="with --gazette: the Act's year")
+    ap.add_argument("--gazette-title", help='with --gazette: the title, e.g. "The Income-tax Act, 2025"')
     ap.add_argument("--limit", type=int, help="stop after this many Acts")
     ap.add_argument("--dry-run", action="store_true", help="read and count only; save nothing")
     ap.add_argument("--force", action="store_true", help="collect again even when the PDF has not changed")
     args = ap.parse_args()
+
+    if args.gazette:
+        if not (args.act_number and args.act_year and args.gazette_title):
+            ap.error("--gazette needs --act-number, --act-year and --gazette-title")
+        run_id = str(uuid.uuid4())
+        con = jb_db.connect()
+        print(f"run {run_id} | Gazette of India | {'DRY RUN, nothing saved' if args.dry_run else 'saving'}")
+        result = load_gazette(con, run_id, args.gazette, args.act_number, args.act_year, args.gazette_title.strip(),
+                              args.dry_run, args.force)
+        con.close()
+        print(f"done: {{'{result}': 1}}")
+        return 1 if result == "failed" else 0
 
     titles = list(args.title)
     if args.titles_file:
         with open(args.titles_file, encoding="utf-8") as f:
             titles += [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
     if not titles and not args.all_central and not args.repealed and not args.all_repealed and not args.state:
-        ap.error("give --title, --titles-file, --all-central, --all-repealed, --state or --repealed")
+        ap.error("give --title, --titles-file, --all-central, --all-repealed, --state, --repealed or --gazette")
 
     acts = []
     whole_lists: list[tuple[str, Optional[str], set[str]]] = []      # lists read in full this run

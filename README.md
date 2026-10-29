@@ -55,7 +55,11 @@ python load.py --titles-file sample_acts.txt --dry-run       # read and count on
 python load.py --all-central                                 # all central Acts
 python load.py --all-repealed
 python load.py --state Telangana --limit 10
+# a new Act India Code does not have yet, from its Gazette of India PDF
+python load.py --gazette https://egazette.gov.in/WriteReadData/2025/265620.pdf --act-number 30 --act-year 2025 --gazette-title "The Income-tax Act, 2025"
 ```
+
+**Gazette Acts.** A new Act appears in the Gazette before India Code has it. `--gazette` saves it as a central Act with `source = 'gazette'`; the pipeline's `text` step cuts its sections from the Gazette layout (headings in the margin). When India Code later lists the same Act (same number and year), the weekly run updates that same row instead of adding a second one, so its code, saved sections and links stay. egazette.gov.in sends an incomplete certificate chain; the loader fetches the missing issuer certificates and still checks the site's certificate in full.
 
 ## Folders
 
@@ -76,7 +80,7 @@ python load.py --state Telangana --limit 10
 
 ## Pending
 
-1. **Repealed dry run:** check its `FAILED` lines (titles the reader can't parse) and fix them before the first real load.
+1. ~~**Repealed dry run:** check its `FAILED` lines~~ — done 29 Oct: 4,618 read, 11 failed titles fixed (India Code typos "49of 1952", "12 o f 1947", "4 to 1900"; no number in the title → taken from the PDF file name; British Acts with no number get a code like `A1935-XE34DE5`). An Act we hold as in force that is in the repealed list without a repeal note (the Tribunals Reforms Act 2021) is left in force.
 2. **State Acts plan:**
    - run about 10 Acts each from Telangana, Andhra Pradesh and two more states (Run workflow → `states`, `limit = 10`);
    - run the pipeline's `text` step;

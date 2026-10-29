@@ -197,11 +197,12 @@ def act_code(act_number: Optional[int], act_year: int, state_name: Optional[str]
              source_act_id: str = "") -> str:
     """Short code of an Act, unique across the Centre and the states.
     Central: "BNS" for the well-known ones, else "A2019-35". State: "TS-1988-12";
-    a state Act with no number gets a few characters of its India Code id instead."""
-    if not state_name:
-        return SHORT_CODES.get((act_number, act_year)) or f"A{act_year}-{act_number or 0}"
-    st = STATE_CODES.get(state_name) or re.sub(r"[^A-Za-z]", "", state_name)[:6].upper()
+    An Act with no number (a state Act, or a British Act such as the Government of India Act, 1935)
+    gets a few characters of its India Code id instead."""
     tail = str(act_number) if act_number else "X" + hashlib.sha256(source_act_id.encode()).hexdigest()[:6].upper()
+    if not state_name:
+        return SHORT_CODES.get((act_number, act_year)) or f"A{act_year}-{tail}"
+    st = STATE_CODES.get(state_name) or re.sub(r"[^A-Za-z]", "", state_name)[:6].upper()
     return f"{st}-{act_year}-{tail}"
 
 
@@ -242,6 +243,17 @@ def central_act_by_number(cur, number: int, year: int) -> Optional[dict]:
               and coalesce(source_act_id, '') not like 'REPEAL:%%' limit 1""", (number, year))
     row = cur.fetchone()
     return {"id": row[0], "code": row[1], "status": row[2], "replaced_by": row[3]} if row else None
+
+
+def gazette_copy(cur, number: Optional[int], year: Optional[int]) -> Optional[dict]:
+    """The central Act with this number and year that we hold from the Gazette of India
+    (loaded before India Code had it), if any."""
+    if not number or not year:
+        return None
+    cur.execute("select id, code, title from bare_acts where source = 'gazette' and jurisdiction = 'central' "
+                "and act_number = %s and act_year = %s limit 1", (number, year))
+    row = cur.fetchone()
+    return {"id": row[0], "code": row[1], "title": row[2]} if row else None
 
 
 def code_for_act(cur, number: int, year: int) -> Optional[str]:
@@ -306,6 +318,11 @@ def save_act(cur, a: dict) -> str:
     """
     cur.execute("select id from bare_acts where source_act_id = %s", (a["source_act_id"],))
     row = cur.fetchone()
+    if not row and a.get("source") == "india_code" and a.get("jurisdiction") == "central":
+        # a new Act loaded from the Gazette of India before India Code had it: India Code's copy
+        # takes over the same row (same JurisBound code and number, saved items and links kept)
+        held = gazette_copy(cur, a.get("act_number"), a.get("act_year"))
+        row = (held["id"],) if held else None
     if not row:
         cur.execute("select id from bare_acts where code = %s and source_act_id is null", (a["code"],))
         row = cur.fetchone()
