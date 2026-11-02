@@ -12,10 +12,11 @@
 # An Act we hold that India Code moves to the repealed list is noticed by the weekly run (it leaves the
 # list of Acts) and marked repealed in place by the monthly run (same row, same JurisBound number).
 #
-# State Acts: started by hand (Run workflow, what = states). JurisBound decided (28 Oct 2026) to load
-# all states after the section cutting has been tested on a few states; one job per state, at most
-# 5 at a time, each with India Code's two-second pause between requests. A big state that does not
-# finish within one run is finished by running it again with skip_saved = true.
+# State Acts: weekly too (Sunday night, with the central Acts): every state and union territory,
+# one job per state, at most 5 at a time, each with India Code's two-second pause between requests.
+# After the first full load a weekly run mostly finds Acts unchanged (no download). Also started by
+# hand (Run workflow, what = states). A big state that does not finish within one run is finished by
+# running it again with skip_saved = true.
 #
 # Gazette: started by hand (Run workflow, what = gazette) for a new Act that is in the Gazette of India
 # but not yet on India Code: give the Gazette PDF link, the Act's number, year and title. Only the PDF
@@ -26,7 +27,7 @@ name: JurisBound - Bare Acts (India Code)
 
 on:
   schedule:
-    - cron: "30 16 * * 0"          # weekly, Sundays 22:00 IST: central Acts (GitHub often starts it later)
+    - cron: "30 16 * * 0"          # weekly, Sundays 22:00 IST: central Acts and every state's Acts (GitHub often starts it later)
     - cron: "30 18 1 * *"          # monthly, the 2nd at 00:00 IST: repealed Acts
   workflow_dispatch:
     inputs:
@@ -129,7 +130,8 @@ jobs:
           python load.py $ARGS
 
   plan:
-    if: github.event.inputs.what == 'states'
+    # by hand (what = states), and every week with the central Acts (all states)
+    if: github.event.schedule == '30 16 * * 0' || github.event.inputs.what == 'states'
     runs-on: ubuntu-latest
     outputs:
       states: ${{ steps.list.outputs.states }}
@@ -137,7 +139,7 @@ jobs:
       - uses: actions/checkout@v5
       - id: list
         env:
-          IN_STATES: ${{ github.event.inputs.states }}
+          IN_STATES: ${{ github.event_name == 'schedule' && 'all' || github.event.inputs.states }}
         run: |
           python3 - <<'PY'
           import json, os
