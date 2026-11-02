@@ -14,7 +14,8 @@
 #
 # State Acts: started by hand (Run workflow, what = states). JurisBound decided (28 Oct 2026) to load
 # all states after the section cutting has been tested on a few states; one job per state, at most
-# 3 at a time, each with India Code's two-second pause between requests.
+# 5 at a time, each with India Code's two-second pause between requests. A big state that does not
+# finish within one run is finished by running it again with skip_saved = true.
 #
 # Gazette: started by hand (Run workflow, what = gazette) for a new Act that is in the Gazette of India
 # but not yet on India Code: give the Gazette PDF link, the Act's number, year and title. Only the PDF
@@ -45,6 +46,10 @@ on:
         default: ""
       dry_run:
         description: "true = read and count only, save nothing"
+        required: false
+        default: "false"
+      skip_saved:
+        description: "states only: true = finish an earlier run; Acts already saved are skipped without asking India Code"
         required: false
         default: "false"
       gazette_url:
@@ -156,7 +161,7 @@ jobs:
     timeout-minutes: 355
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 5
       matrix:
         state: ${{ fromJson(needs.plan.outputs.states) }}
     concurrency: { group: "bare-acts-${{ matrix.state }}", cancel-in-progress: false }
@@ -171,10 +176,12 @@ jobs:
           IN_STATE: ${{ matrix.state }}
           IN_LIMIT: ${{ github.event.inputs.limit }}
           IN_DRY: ${{ github.event.inputs.dry_run || 'false' }}
+          IN_SKIP: ${{ github.event.inputs.skip_saved || 'false' }}
         run: |
           ARGS=""
           [ -n "$IN_LIMIT" ] && ARGS="$ARGS --limit $IN_LIMIT"
           [ "$IN_DRY" = "true" ] && ARGS="$ARGS --dry-run"
+          [ "$IN_SKIP" = "true" ] && ARGS="$ARGS --skip-saved"
           echo "Running: python load.py --state \"$IN_STATE\" $ARGS"
           python load.py --state "$IN_STATE" $ARGS
 

@@ -179,7 +179,7 @@ def number_from_file(files: list[dict], year: int) -> Optional[int]:
     return None
 
 
-def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
+def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved: bool = False) -> str:
     repealed = act.get("_repealed")
     title = act["name"]
     # a repealed record has no India Code act id; its record id identifies it
@@ -223,6 +223,18 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool) -> str:
                         jb_db.log(cur, run_id, {**entry, "act_id": held["id"], "status": "loaded",
                                                 "note": f"now repealed: {old['note']}"})
                 return "loaded"
+        if skip_saved and not repealed and not force:
+            # finishing a big state over several runs: an Act already saved is not checked with India
+            # Code again (no file list read, no two-second pause); the weekly change check does that
+            with con.cursor() as cur:
+                held_copy = jb_db.existing_version(cur, act_id_src)
+            if held_copy:
+                if not dry_run:
+                    with con, con.cursor() as cur:
+                        jb_db.log(cur, run_id, {**entry, "status": "unchanged",
+                                                "note": "already saved; not checked again (--skip-saved)"})
+                print(f"  unchanged  {title} (already saved; not checked again)")
+                return "unchanged"
         files = files if files is not None else ic.act_files(act["uuid"])
         chosen = pick_english_pdf(files)
         if not chosen:
@@ -443,6 +455,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, help="stop after this many Acts")
     ap.add_argument("--dry-run", action="store_true", help="read and count only; save nothing")
     ap.add_argument("--force", action="store_true", help="collect again even when the PDF has not changed")
+    ap.add_argument("--skip-saved", action="store_true",
+                    help="finish an earlier run: Acts already saved are skipped without asking India Code "
+                         "(no change check; the weekly run checks for changes)")
     args = ap.parse_args()
 
     if args.gazette:
@@ -501,7 +516,7 @@ def main() -> int:
     counts: dict[str, int] = {}
     print(f"run {run_id} | {len(acts)} Acts | {'DRY RUN, nothing saved' if args.dry_run else 'saving'}")
     for act in acts:
-        result = load_act(con, run_id, act, args.dry_run, args.force)
+        result = load_act(con, run_id, act, args.dry_run, args.force, args.skip_saved)
         counts[result] = counts.get(result, 0) + 1
     if not args.dry_run:
         for jurisdiction, st, seen in whole_lists:
