@@ -34,6 +34,25 @@ def _black_and_white(im: Image.Image) -> Image.Image:
     return im.point(lambda p: 255 if p > _INK else 0).convert("1")
 
 
+def _gray_picture(doc: fitz.Document, xref: int) -> Optional[Image.Image]:
+    """The picture in grey: decoded by PyMuPDF (JPEG, JPEG 2000, JBIG2, fax, …), else by Pillow from
+    the stored bytes (a picture stored without a colour space, Sikkim Municipalities Act, 2007)."""
+    try:
+        pix = fitz.Pixmap(doc, xref)
+        if pix.colorspace is None:
+            raise ValueError("no colour space")
+        if pix.n - pix.alpha != 1:
+            pix = fitz.Pixmap(fitz.csGRAY, pix)
+        if pix.alpha:
+            pix = fitz.Pixmap(pix, 0)
+        return Image.frombytes("L", (pix.width, pix.height), pix.samples)
+    except Exception:
+        try:
+            return Image.open(io.BytesIO(doc.extract_image(xref)["image"])).convert("L")
+        except Exception:
+            return None
+
+
 def _scan_pictures(doc: fitz.Document) -> None:
     """Every page picture replaced in place (the same object: the page's text layer is untouched)."""
     seen: set[int] = set()
@@ -43,13 +62,10 @@ def _scan_pictures(doc: fitz.Document) -> None:
             if xref in seen or smask:
                 continue                       # a picture with a transparency mask is left alone
             seen.add(xref)
-            # decoded by PyMuPDF, which reads every PDF picture format (JPEG, JPEG 2000, JBIG2, fax, …)
-            pix = fitz.Pixmap(doc, xref)
-            if pix.n - pix.alpha != 1:
-                pix = fitz.Pixmap(fitz.csGRAY, pix)
-            if pix.alpha:
-                pix = fitz.Pixmap(pix, 0)
-            bw = _black_and_white(Image.frombytes("L", (pix.width, pix.height), pix.samples))
+            gray = _gray_picture(doc, xref)
+            if gray is None:
+                continue                       # a picture neither reader can open stays as it is
+            bw = _black_and_white(gray)
             doc.update_stream(xref, zlib.compress(bw.tobytes(), 9), compress=False)
             for key, value in (("Filter", "/FlateDecode"), ("ColorSpace", "/DeviceGray"), ("BitsPerComponent", "1"),
                                ("Width", str(bw.width)), ("Height", str(bw.height)), ("DecodeParms", "null")):
