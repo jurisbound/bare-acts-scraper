@@ -31,6 +31,7 @@ One Act is one database transaction: an Act that fails leaves nothing half-saved
 from __future__ import annotations
 
 import argparse
+import difflib
 import html
 import re
 import sys
@@ -57,6 +58,72 @@ def _date(v) -> Optional[date]:
         return datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
     except (TypeError, ValueError):
         return None
+
+
+def _not_english(title: str) -> bool:
+    """A title in another script (Malayalam, Devanagari): the Act's Malayalam/Hindi entry."""
+    letters = [c for c in title or "" if c.isalpha()]
+    return bool(letters) and sum(not c.isascii() for c in letters) > len(letters) * 0.5
+
+
+_TITLE_SKIP = {"the", "act", "acts", "and", "of", "in", "for", "single", "document", "doc", "amendment", "no", "state"}
+
+
+def _same_title(held: str, new: str, state: str) -> bool:
+    """Two India Code entries with one number and year are the same Act when their titles are:
+    the same words, the same words spelt differently ("Salaraies", "CO-OPERATIVE"/"COOPERATIVE"),
+    or one of them in Malayalam/Hindi (its English entry carries the same number)."""
+    if _not_english(held) or _not_english(new):
+        return True
+    skip = _TITLE_SKIP | set(re.findall(r"[a-z]+", (state or "").lower()))
+
+    def words(t):
+        return {re.sub(r"s$", "", w) for w in re.findall(r"[a-z]{3,}", t.lower()) if w not in skip}
+
+    a, b = words(held), words(new)
+    if not a or not b:
+        return True                                    # too little to tell apart: one Act
+    if len(a & b) / len(a | b) >= 0.5:
+        return True
+    return difflib.SequenceMatcher(None, "".join(sorted(a)), "".join(sorted(b))).ratio() >= 0.8
+
+
+def _uploaded_on(act_id: str) -> Optional[date]:
+    """The day India Code put the entry up: its id ends in the time in milliseconds
+    ("AC_AS_58_529_00069_00069_1591090210163" -> 2 June 2020)."""
+    m = re.search(r"_(\d{13})$", act_id or "")
+    return datetime.utcfromtimestamp(int(m.group(1)) / 1000).date() if m else None
+
+
+def save_extra_copy(con, run_id: str, act: dict, entry: dict, title: str, chosen: dict, same_act: dict,
+                    dry_run: bool) -> str:
+    """Another India Code entry of an Act we hold: its PDF (and any section records) is kept as
+    another copy of that Act, not shown; the copy shown stays as it is."""
+    act_id_src = entry["source_act_id"]
+    print(f"  extra copy {title} -> {same_act['code']} | PDF {chosen['name']} {chosen['size'] / 1e6:.1f} MB")
+    if dry_run:
+        return "extra copy kept"
+    data = ic.download(chosen["url"])
+    rows = section_rows(ic.act_records(act_id_src))
+    n_sections = sum(1 for r in rows if r["kind"] == "section")
+    year = _int(ic.field(act, "act_year"))
+    with con.cursor() as cur:
+        as_on = jb_db.free_date(cur, same_act["id"], _uploaded_on(act_id_src) or date.today())
+    # its own file: the shown copy's PDF is never overwritten
+    key = jb_db.storage_key(ic.field(act, "state_name"), year, _int(ic.field(act, "act_number")), title, as_on,
+                            language="copy-" + jb_db.sha256(act_id_src.encode())[:8])
+    jb_db.upload_pdf(key, data)
+    with con, con.cursor() as cur:
+        version = jb_db.save_version(cur, same_act["id"], {
+            "as_on": as_on, "pdf_path": key, "pdf_sha256": jb_db.sha256(data), "source_pdf_url": chosen["url"],
+            "section_count": n_sections, "sections_source": "india_code" if n_sections else None,
+            "source_checksum": chosen.get("checksum"),
+        }, publish=False)
+        jb_db.save_sections(cur, version, rows)
+        jb_db.log(cur, run_id, {**entry, "act_id": same_act["id"], "status": "loaded", "pdf_saved": True,
+                                "note": f"another India Code entry of {same_act['code']} (\"{same_act['title'][:60]}\"), "
+                                        "kept as another copy of that Act; the copy shown is unchanged"})
+    return "extra copy kept"
 
 
 def pick_english_pdf(files: list[dict]) -> Optional[dict]:
@@ -236,9 +303,23 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
                 print(f"  unchanged  {title} (already saved; not checked again)")
                 return "unchanged"
         files = files if files is not None else ic.act_files(act["uuid"])
+        if not any(f["name"].lower().endswith(".pdf") for f in files):
+            # Not an Act with a missing PDF: India Code files only the state's rules, notifications or
+            # orders under this entry (mostly central Acts listed under a state), or just a title.
+            # Nothing to collect; logged as such, not as a failure.
+            groups = {} if repealed else ic.act_records(act_id_src)
+            held_kinds = sorted(k for k, v in groups.items() if v and k != "ACT")
+            what = f"only the state's {', '.join(k.lower() + 's' for k in held_kinds)}" if held_kinds else "only a title"
+            note = f"no Act PDF on India Code ({what})"
+            if not dry_run:
+                with con, con.cursor() as cur:
+                    jb_db.log(cur, run_id, {**entry, "status": "mismatch", "note": note, "pdf_saved": False})
+            print(f"  no PDF     {title}: {note}")
+            return "no PDF on India Code"
         chosen = pick_english_pdf(files)
         if not chosen:
-            raise RuntimeError(f"no PDF among the Act's files: {[f['name'] for f in files]}")
+            raise RuntimeError(f"the Act's PDF is over {MAX_PDF_BYTES // (1024 * 1024)} MB: "
+                               f"{[(f['name'], round(f['size'] / 1e6)) for f in files][:3]}")
         with con.cursor() as cur:
             saved = jb_db.existing_version(cur, act_id_src)
         # Quick check, no download: India Code lists a fingerprint of each stored file.
@@ -249,6 +330,35 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
                     jb_db.log(cur, run_id, {**entry, "status": "unchanged", "note": "same PDF as the saved copy"})
             print(f"  unchanged  {title}")
             return "unchanged"
+
+        # Another India Code entry of a state Act we already hold (same state, number and year):
+        # India Code lists some Acts two to four times (an earlier upload, a "(Single Document)"
+        # upload, the Malayalam/Hindi text). One Act, several copies: the copy shown stays as it is
+        # and this one is kept as another copy of the same Act; the English entry is always the one
+        # shown (it takes over from a Malayalam/Hindi entry saved first).
+        entry_state = None if repealed else ic.field(act, "state_name")
+        same_act, other_act = None, False
+        if not saved and entry_state and entry_state != "CENTRAL":
+            with con.cursor() as cur:
+                held_same_no = jb_db.state_acts_by_number(cur, entry_state, _int(ic.field(act, "act_number")),
+                                                          _int(ic.field(act, "act_year")), act_id_src)
+            # the same Act only when the title is too; India Code also gives different Acts one number
+            # ("The Mizoram (Market) Regulation (Amendment) Act, 1996" and "The Mizoram Sales Tax
+            # (Amendment) Act, 1997" are both its Act 8 of 1996): such an entry is an Act of its own
+            same_act = next((h for h in held_same_no if _same_title(h["title"], title, entry_state)), None)
+            other_act = bool(held_same_no) and same_act is None
+        take_over = bool(same_act) and _not_english(same_act["title"]) and not _not_english(title)
+        if same_act and not take_over:
+            with con.cursor() as cur:
+                if chosen.get("checksum") and chosen["checksum"] in jb_db.version_checksums(cur, same_act["id"]):
+                    if not dry_run:
+                        with con, con.cursor() as cur2:
+                            jb_db.log(cur2, run_id, {**entry, "act_id": same_act["id"], "status": "unchanged",
+                                                     "note": f"another India Code entry of {same_act['code']}; "
+                                                             "this copy is already kept"})
+                    print(f"  unchanged  {title} (another India Code entry of {same_act['code']}, copy already kept)")
+                    return "unchanged"
+            return save_extra_copy(con, run_id, act, entry, title, chosen, same_act, dry_run)
 
         # a dry run only counts: it does not download the PDF
         data = b"" if dry_run else ic.download(chosen["url"])
@@ -293,8 +403,15 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
                 if gz:
                     notes.append(f"India Code's copy takes over {gz['code']}, loaded earlier from the Gazette of India")
                     print(f"  takes over {gz['code']} ({gz['title']}), loaded earlier from the Gazette of India")
+            code = jb_db.act_code(number, year, state, act_id_src)
+            if other_act:
+                # another Act with the same number on India Code holds that code: this one gets a few
+                # characters of its India Code id (its JurisBound number then ends in U001, …)
+                code += "-X" + jb_db.sha256(act_id_src.encode())[:6].upper()
+                notes.append(f"India Code gives this Act the same number as another Act we hold ({number} of {year}); "
+                             "saved as an Act of its own")
             act_row = jb_db.save_act(cur, {
-                "code": jb_db.act_code(number, year, state, act_id_src), "title": title, "act_number": number, "act_year": year,
+                "code": code, "title": title, "act_number": number, "act_year": year,
                 "jurisdiction": "central" if not state else "state",
                 "status": "repealed" if repealed or ic.field(act, "repealed") == "true" else "in_force",
                 "replaced_by_code": old["replaced_by"] if old else None,
@@ -306,7 +423,13 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
                 "enacted_on": _date(ic.field(act, "enact_date")),
                 "enforcement_note": old["note"] if old else ic.field(act, "enforcement_date"),
                 "subject_type": ic.field(act, "type"), "summary": ic.field(act, "description.abstract"),
+                "take_over_id": same_act["id"] if take_over else None,
             })
+            if take_over:
+                # the Malayalam/Hindi copy shown so far stays, as another copy; one copy per date
+                fetched = jb_db.free_date(cur, act_row, fetched)
+                notes.append(f"English entry; the {same_act['code']} copy saved first (\"{same_act['title'][:60]}\") "
+                             "is kept as another copy")
             version = jb_db.save_version(cur, act_row, {
                 "as_on": fetched, "pdf_path": key, "pdf_sha256": digest, "source_pdf_url": chosen["url"],
                 "section_count": n_sections, "sections_source": "india_code" if n_sections else None,

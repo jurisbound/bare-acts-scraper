@@ -15,7 +15,7 @@ It **only collects**: the Act record, its section records (when India Code has t
 |---|---|---|
 | Central Acts | 848 (830 with section records) | all, weekly |
 | Repealed central Acts | 4,632 | all, monthly (a title and a PDF each; sections are cut from the PDF in the pipeline) |
-| State and UT Acts (36) | 10,529 | by hand, per state (`bare-acts/states.txt`), after the section cutting is tested |
+| State and UT Acts (36) | 10,544 entries = 9,763 Acts (781 entries are extra copies of an Act) | weekly, with the central Acts; also by hand, per state (`bare-acts/states.txt`) |
 
 - **A State's copy of a central Act** is kept as that state's own Act (its own code and JurisBound number, shown under the state). It never replaces the central Act, because a state copy can carry state amendments.
 - **Section text:** India Code's section records are the text; the PDF never replaces them. Acts without records get their sections from the PDF in the pipeline.
@@ -26,7 +26,9 @@ It **only collects**: the Act record, its section records (when India Code has t
 - **Unchanged Acts are skipped without a download.** India Code lists a fingerprint of each stored PDF, so a run only downloads new or amended Acts.
 - **A newly repealed Act** (India Code moves it from the Acts list to the repealed list) is marked repealed on the row we already hold: same JurisBound number, sections and saved items, no second copy.
 - **The repealing Act** is read from the repealed title ("Rep., Act 45 of 2023") and linked when we hold it; if it is loaded later, the link is made at the end of a later run.
-- **A changed Act** is saved as a new dated copy and marked for the pipeline. It keeps its JurisBound number (`JB-ACT-CEN-2023-0000001`, `JB-ACT-TS-…`), which the database gives.
+- **A changed Act** is saved as a new dated copy and marked for the pipeline. It keeps its JurisBound number, which the database gives from the Act's official number: Hindu Marriage Act, 1955 (Act 25 of 1955) = `JB-ACT-CEN-1955-0025`, Telangana Act 12 of 2019 = `JB-ACT-TS-2019-0012`; an Act without a usable number gets `JB-ACT-…-U001`.
+- **The same state Act listed more than once** (India Code lists some Acts two to four times: an earlier upload, a "(Single Document)" upload, the Malayalam/Hindi text): one Act. The other entries' PDFs are kept as further copies of that Act (not shown; the copy shown stays the same), and an English entry is always the copy shown.
+- **An entry without a PDF** holds only the state's rules, notifications or orders under an Act (mostly a central Act listed under the state), or only a title: logged as "no Act PDF on India Code", not as a failure.
 - **An Act no longer listed** after a full run gets `source_missing_since` (usually repealed). Nothing is deleted.
 
 Every Act of every run is written to `bare_act_load_log` with the status `loaded`, `unchanged`, `mismatch` or `failed`.

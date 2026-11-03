@@ -256,12 +256,15 @@ CREATE INDEX IF NOT EXISTS ix_bare_act_load_log_act ON bare_act_load_log (source
 -- [Azure] no row-level security
 
 -- -----------------------------------------------------------------------------
--- 7. JurisBound number for an Act
---      central  JB-ACT-CEN-2023-0000001
---      state    JB-ACT-TS-2017-0000001
---    Same method as judgments: the database gives the number when the row is
---    inserted (counter per series and year, in public.doc_number_counters).
---    The year is the Act's year. The number never changes afterwards.
+-- 7. JurisBound number for an Act = the Act's official number (decided 3 Nov 2026;
+--    02_act_numbers_official.sql renumbered the Acts held before that)
+--      Hindu Marriage Act, 1955 (Act 25 of 1955)   JB-ACT-CEN-1955-0025
+--      Telangana Act 12 of 2019                     JB-ACT-TS-2019-0012
+--      no usable official number                    JB-ACT-OD-2010-U001
+--    The database gives the number when the row is inserted. India Code's act_number is
+--    used when it looks real (1-999 and not the year); else the number the title states
+--    ("(18 of 2019)") for the Act's year; else, or when taken, "U" and a counter per state
+--    and year (doc_number_counters, series JB-ACT-XX-U). The number never changes afterwards.
 --    State short codes: jb_kb.bare_act_state_codes (section 8), key = state
 --    name as India Code writes it. A state with no code yet falls back to the
 --    first letters of its name, so an insert never fails for want of a code.
@@ -297,12 +300,47 @@ BEGIN
 END
 $$;
 
+CREATE OR REPLACE FUNCTION jb_kb.act_doc_number(p_id uuid, p_state_name text, p_year integer,
+                                                p_number integer, p_title text) RETURNS text
+LANGUAGE plpgsql
+SET search_path = jb_kb
+AS $$
+DECLARE
+    v_series text := jb_kb.act_series(p_state_name);
+    v_no     integer;
+    v_m      text[];
+    v_cand   text;
+    v_next   integer;
+BEGIN
+    IF p_number BETWEEN 1 AND 999 AND p_number IS DISTINCT FROM p_year THEN
+        v_no := p_number;
+    ELSE
+        -- "(18 of 2019)", "(No.40 of 1963)", "(Delhi Act 11 of 2007)"
+        v_m := regexp_match(coalesce(p_title, ''), '\(\s*(?:[A-Za-z.]+\s+)*?(?:No\.?\s*)?(\d{1,3})\s+of\s+(\d{4})\s*\)', 'i');
+        IF v_m IS NOT NULL AND v_m[2]::int = p_year AND v_m[1]::int > 0 THEN
+            v_no := v_m[1]::int;
+        END IF;
+    END IF;
+    IF v_no IS NOT NULL THEN
+        v_cand := v_series || '-' || p_year || '-' || lpad(v_no::text, 4, '0');
+        IF NOT EXISTS (SELECT 1 FROM bare_acts WHERE doc_number = v_cand AND id IS DISTINCT FROM p_id) THEN
+            RETURN v_cand;
+        END IF;
+    END IF;
+    INSERT INTO doc_number_counters AS c (series, year, last_value)
+    VALUES (v_series || '-U', p_year, 1)
+    ON CONFLICT (series, year) DO UPDATE SET last_value = c.last_value + 1
+    RETURNING last_value INTO v_next;
+    RETURN v_series || '-' || p_year || '-U' || lpad(v_next::text, 3, '0');
+END
+$$;
+
 CREATE OR REPLACE FUNCTION jb_kb.assign_act_number() RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
     IF NEW.doc_number IS NULL THEN
-        NEW.doc_number := jb_kb.next_act_number(NEW.state_name, NEW.act_year);
+        NEW.doc_number := jb_kb.act_doc_number(NEW.id, NEW.state_name, NEW.act_year, NEW.act_number, NEW.title);
     END IF;
     RETURN NEW;
 END

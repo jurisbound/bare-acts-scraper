@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -245,6 +245,38 @@ def central_act_by_number(cur, number: int, year: int) -> Optional[dict]:
     return {"id": row[0], "code": row[1], "status": row[2], "replaced_by": row[3]} if row else None
 
 
+def state_acts_by_number(cur, state_name: str, number: Optional[int], year: Optional[int],
+                         source_act_id: str) -> list[dict]:
+    """The state Acts we hold with this number and year under other India Code entries.
+    India Code lists some Acts two to four times (an earlier upload, a "(Single Document)" upload,
+    the Malayalam or Hindi text); it also gives some different Acts the same number. The loader
+    tells them apart by the title."""
+    if not number or not year:
+        return []
+    cur.execute("""select id, code, title from bare_acts
+                    where jurisdiction = 'state' and state_name = %s and act_number = %s and act_year = %s
+                      and coalesce(source_act_id, '') <> %s
+                    order by created_at""", (state_name, number, year, source_act_id))
+    return [{"id": r[0], "code": r[1], "title": r[2]} for r in cur.fetchall()]
+
+
+def version_checksums(cur, act_id: str) -> set[str]:
+    """India Code's file fingerprints of every copy we hold of an Act."""
+    cur.execute("select source_checksum from bare_act_versions where act_id = %s and source_checksum is not null",
+                (act_id,))
+    return {r[0] for r in cur.fetchall()}
+
+
+def free_date(cur, act_id: str, wanted: date) -> date:
+    """A copy's date, not yet used by another copy of the same Act (one copy per date)."""
+    cur.execute("select consolidated_as_of from bare_act_versions where act_id = %s", (act_id,))
+    used = {r[0] for r in cur.fetchall()}
+    d = wanted
+    while d in used:
+        d -= timedelta(days=1)
+    return d
+
+
 def gazette_copy(cur, number: Optional[int], year: Optional[int]) -> Optional[dict]:
     """The central Act with this number and year that we hold from the Gazette of India
     (loaded before India Code had it), if any."""
@@ -318,6 +350,11 @@ def save_act(cur, a: dict) -> str:
     """
     cur.execute("select id from bare_acts where source_act_id = %s", (a["source_act_id"],))
     row = cur.fetchone()
+    if not row and a.get("take_over_id"):
+        # the English entry of an Act we hold from its Malayalam/Hindi entry: the same row (code,
+        # JurisBound number, saved items) now goes by the English entry
+        row = (a["take_over_id"],)
+    a = {k: v for k, v in a.items() if k != "take_over_id"}
     if not row and a.get("source") == "india_code" and a.get("jurisdiction") == "central":
         # a new Act loaded from the Gazette of India before India Code had it: India Code's copy
         # takes over the same row (same JurisBound code and number, saved items and links kept)
@@ -338,7 +375,8 @@ def save_act(cur, a: dict) -> str:
         cur.execute(
             f"update bare_acts set {sets}, category = coalesce(category, %(category)s), "
             # a sample row taken over has no JurisBound number yet; a row that has one keeps it
-            "doc_number = coalesce(doc_number, next_act_number(%(state_name)s, %(act_year)s)), updated_at = now() "
+            "doc_number = coalesce(doc_number, act_doc_number(%(id)s, %(state_name)s, %(act_year)s, "
+            "%(act_number)s, %(title)s)), updated_at = now() "
             "where id = %(id)s", {**a, "id": row[0]})
         return row[0]
     cols = cols + ["category"]
@@ -347,15 +385,17 @@ def save_act(cur, a: dict) -> str:
     return cur.fetchone()[0]
 
 
-def save_version(cur, act_id: str, v: dict) -> str:
+def save_version(cur, act_id: str, v: dict, publish: bool = True) -> str:
     """One copy of the Act (one PDF). The date is the day it was fetched; the
     pipeline replaces it with the "as on" date printed in the PDF. Saving the
-    same copy again replaces its sections and sends it through the pipeline again."""
+    same copy again replaces its sections and sends it through the pipeline again.
+    publish=False: another India Code entry of the same Act, kept as a copy that is not shown
+    (status superseded, dated the day India Code uploaded it); the shown copy stays as it is."""
     cur.execute(
         """insert into bare_act_versions
              (act_id, consolidated_as_of, as_on_source, status, pdf_path, pdf_sha256, source_pdf_url,
               section_count, sections_source, source_checksum, text_status, index_status, fetched_at)
-           values (%(act_id)s, %(as_on)s, 'fetch_date', 'published', %(pdf_path)s, %(pdf_sha256)s,
+           values (%(act_id)s, %(as_on)s, %(as_on_source)s, %(status)s, %(pdf_path)s, %(pdf_sha256)s,
                    %(source_pdf_url)s, %(section_count)s, %(sections_source)s, %(source_checksum)s,
                    'pending', null, now())
            on conflict (act_id, consolidated_as_of) do update set
@@ -365,15 +405,17 @@ def save_version(cur, act_id: str, v: dict) -> str:
               text_status = 'pending', text_note = null,
               index_status = null, fetched_at = now()
            returning id""",
-        {**v, "act_id": act_id},
+        {"as_on_source": "fetch_date" if publish else "india_code_upload", **v,
+         "status": "published" if publish else "superseded", "act_id": act_id},
     )
     version_id = cur.fetchone()[0]
     cur.execute("delete from bare_act_sections where version_id = %s", (version_id,))
     cur.execute("delete from bare_act_parts where version_id = %s", (version_id,))
-    cur.execute(
-        "update bare_act_versions set status = 'superseded' where act_id = %s and id <> %s and status = 'published'",
-        (act_id, version_id),
-    )
+    if publish:
+        cur.execute(
+            "update bare_act_versions set status = 'superseded' where act_id = %s and id <> %s and status = 'published'",
+            (act_id, version_id),
+        )
     return version_id
 
 

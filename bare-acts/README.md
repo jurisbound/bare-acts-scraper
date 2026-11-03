@@ -27,8 +27,8 @@ Where India Code gives no section records (old repealed central Acts, most state
 
 | Where | What |
 |---|---|
-| `bare_acts` | one row per Act, with its JurisBound number (`JB-ACT-CEN-2023-0000001`, given by a database trigger) |
-| `bare_act_versions` | one row per dated copy: PDF location, fingerprints, `text_status = 'pending'` for the pipeline |
+| `bare_acts` | one row per Act, with its JurisBound number from the Act's official number (`JB-ACT-CEN-1955-0025` = Act 25 of 1955, given by a database trigger; `…-U001` when there is no usable number) |
+| `bare_act_versions` | one row per dated copy: PDF location, fingerprints, `text_status = 'pending'` for the pipeline. The copy shown is `published`; other India Code entries of the same Act are kept as `superseded` copies dated the day India Code uploaded them |
 | `bare_act_sections` | one row per section or rule (only when India Code gives them) |
 | `bare_act_load_log` | one row per Act per run: counts, notes, errors |
 | Storage | `acts/central/<year>/act-<number>-<name>/<as-on-date>/english.pdf`; states: `acts/state/<state>/…` |
