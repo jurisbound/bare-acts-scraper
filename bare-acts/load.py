@@ -196,7 +196,8 @@ def section_rows(groups: dict) -> list[dict]:
 #   "The Central Provinces Courts Act, 1865, 14 of 1865 (Repealed (as to Oudh), Act 32 of 1871 Repealed (…), Act, 16 of 1885)"
 # The Act's own number and year are the LAST "N of YYYY" before the repeal note; the repealing central
 # Act is the last "Act N of YYYY" in the note that is not a provincial Act ("Bom. Act 4 of 1902").
-_REPEAL_START = re.compile(r"\(\s*Rep(?:ealed)?\b", re.I)
+# "(Rep., Act 45 of 2023)", and without the bracket: "… (7 of 1851) Rep., Act 10 of 1861", "…, Rep., by Act 23 of 2016"
+_REPEAL_START = re.compile(r"\(\s*Rep(?:ealed)?\b|\bRep(?:ealed)?\.?\s*,?\s*(?:by\s+)?Act\b", re.I)
 _NO_OF_YEAR = re.compile(r"(\d{1,4})\s+of\s+(\d{4})\b", re.I)
 # the Act's own "N of YYYY" as India Code types it, typos included: "49of 1952", "12 o f 1947", "4 to 1900"
 _OWN_NO_OF_YEAR = re.compile(r"(\d{1,4})\s*(?:o\s?f|to)\s+(\d{4})\b", re.I)
@@ -214,7 +215,7 @@ def repealed_details(item: dict) -> dict:
     own = list(_OWN_NO_OF_YEAR.finditer(head))
     if own:
         number, year = int(own[-1].group(1)), int(own[-1].group(2))
-        name = head[:own[-1].start()].strip(" ,;:")
+        name = head[:own[-1].start()].strip(" ,;:(")
     else:
         # "The Sea Customs Act, 1878 (Rep., …)": the year only; the number comes from the file name
         # (load_act), and an Act of the British Parliament has none ("Government of India Act, 1935")
