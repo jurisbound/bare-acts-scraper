@@ -42,8 +42,11 @@ from typing import Optional
 
 import india_code as ic
 import jb_db
+import pdf_shrink
 
-MAX_PDF_BYTES = 60 * 1024 * 1024
+# India Code has Act PDFs up to ~300 MB (photo-quality scans, Gazette issues): over SHRINK_ABOVE a
+# light reading copy is kept (pdf_shrink.py)
+MAX_PDF_BYTES = 350 * 1024 * 1024
 
 
 def _int(v) -> Optional[int]:
@@ -95,6 +98,20 @@ def _uploaded_on(act_id: str) -> Optional[date]:
     return datetime.utcfromtimestamp(int(m.group(1)) / 1000).date() if m else None
 
 
+def store_pdf(con, data: bytes, checksum: Optional[str], key: str) -> tuple[str, Optional[str]]:
+    """Put the PDF in storage; returns (where it is, a note). A file India Code gives for more than one
+    Act (a Gazette issue that re-published four Daman and Diu laws) is stored once: the other Acts
+    point to the same file. A very large PDF is kept as a light reading copy (pdf_shrink.py)."""
+    if checksum:
+        with con.cursor() as cur:
+            held = jb_db.path_for_checksum(cur, checksum)
+        if held:
+            return held, "the same file as another Act's copy on India Code: stored once, shared"
+    keep, note = pdf_shrink.reading_copy(data)
+    jb_db.upload_pdf(key, keep)
+    return key, note
+
+
 def save_extra_copy(con, run_id: str, act: dict, entry: dict, title: str, chosen: dict, same_act: dict,
                     dry_run: bool) -> str:
     """Another India Code entry of an Act we hold: its PDF (and any section records) is kept as
@@ -112,7 +129,7 @@ def save_extra_copy(con, run_id: str, act: dict, entry: dict, title: str, chosen
     # its own file: the shown copy's PDF is never overwritten
     key = jb_db.storage_key(ic.field(act, "state_name"), year, _int(ic.field(act, "act_number")), title, as_on,
                             language="copy-" + jb_db.sha256(act_id_src.encode())[:8])
-    jb_db.upload_pdf(key, data)
+    key, stored_note = store_pdf(con, data, chosen.get("checksum"), key)
     with con, con.cursor() as cur:
         version = jb_db.save_version(cur, same_act["id"], {
             "as_on": as_on, "pdf_path": key, "pdf_sha256": jb_db.sha256(data), "source_pdf_url": chosen["url"],
@@ -122,7 +139,8 @@ def save_extra_copy(con, run_id: str, act: dict, entry: dict, title: str, chosen
         jb_db.save_sections(cur, version, rows)
         jb_db.log(cur, run_id, {**entry, "act_id": same_act["id"], "status": "loaded", "pdf_saved": True,
                                 "note": f"another India Code entry of {same_act['code']} (\"{same_act['title'][:60]}\"), "
-                                        "kept as another copy of that Act; the copy shown is unchanged"})
+                                        "kept as another copy of that Act; the copy shown is unchanged"
+                                        + (f"; {stored_note}" if stored_note else "")})
     return "extra copy kept"
 
 
@@ -397,7 +415,9 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
             return "loaded"
 
         if not same_copy:
-            jb_db.upload_pdf(key, data)
+            key, stored_note = store_pdf(con, data, chosen.get("checksum"), key)
+            if stored_note:
+                notes.append(stored_note)
         with con, con.cursor() as cur:
             if not repealed and not state and not saved:
                 gz = jb_db.gazette_copy(cur, number, year)

@@ -260,6 +260,14 @@ def state_acts_by_number(cur, state_name: str, number: Optional[int], year: Opti
     return [{"id": r[0], "code": r[1], "title": r[2]} for r in cur.fetchall()]
 
 
+def path_for_checksum(cur, checksum: str) -> Optional[str]:
+    """Where we already store the file with this India Code fingerprint, if any (one file, many Acts)."""
+    cur.execute("select pdf_path from bare_act_versions where source_checksum = %s and pdf_path is not null limit 1",
+                (checksum,))
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
 def version_checksums(cur, act_id: str) -> set[str]:
     """India Code's file fingerprints of every copy we hold of an Act."""
     cur.execute("select source_checksum from bare_act_versions where act_id = %s and source_checksum is not null",
