@@ -158,6 +158,7 @@ ALTER TABLE bare_act_versions
   ADD COLUMN IF NOT EXISTS hindi_pdf_path  text,
   ADD COLUMN IF NOT EXISTS source_pdf_url  text,
   ADD COLUMN IF NOT EXISTS full_text       text,           -- whole PDF text, page by page
+  ADD COLUMN IF NOT EXISTS layout          jsonb,          -- the whole Act as printed: blocks (heading, para, side note, page …), from acts/act_layout.py
   ADD COLUMN IF NOT EXISTS section_count   int,
   ADD COLUMN IF NOT EXISTS fetched_at      timestamptz,
   ADD COLUMN IF NOT EXISTS as_on_source    text,           -- 'pdf' = date printed in the PDF; 'fetch_date' = older PDFs print none
