@@ -265,6 +265,30 @@ def number_from_file(files: list[dict], year: int) -> Optional[int]:
     return None
 
 
+def number_by_file(old: dict, files: list[dict]) -> Optional[str]:
+    """India Code's repealed-list titles carry some wrong numbers ("The Indian Patents and Designs
+    (Amendment) Act, 1930, 7 of 1938"); the file name has the number printed in the PDF ("A1930-7.pdf":
+    "ACT No. VII OF 1930"). When the two disagree and the file's year is the year in the Act's name (or
+    the next one: an Act passed late in a year is numbered in the next, "State Bank of India (Amendment)
+    Act, 1993" is No. 3 of 1994), the file's number is taken. Returns a note, or None (nothing changed).
+    A file of another year is no guide ("1866-5.pdf" filed under the Mirzapur Stone Mahal Act, 1886)."""
+    named = re.search(r"(\d{4})$", old["title"])
+    if not named or old["number"] is None:
+        return None
+    for f in files:
+        m = _FILE_NO.match(f.get("name") or "")
+        if not m:
+            continue
+        year, number = int(m.group(1)), int(m.group(2))
+        if (number, year) != (old["number"], old["year"]) and year in (int(named.group(1)), int(named.group(1)) + 1):
+            note = (f"India Code's title gives {old['number']} of {old['year']}; its file {f['name']} gives "
+                    f"{number} of {year}, which is used")
+            old["number"], old["year"] = number, year
+            return note
+        return None
+    return None
+
+
 def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved: bool = False) -> str:
     repealed = act.get("_repealed")
     title = act["name"]
@@ -274,15 +298,25 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
     try:
         old = repealed_details(act) if repealed else None      # a title it cannot read fails this Act only
         files = None
-        if old and old["number"] is None:
-            files = ic.act_files(act["uuid"])
-            old["number"] = number_from_file(files, old["year"])
+        number_note = None
+        if old:
+            files = ic.act_files(act["uuid"])                  # read anyway, for the PDF: no extra request
+            if old["number"] is None:
+                old["number"] = number_from_file(files, old["year"])
+            else:
+                number_note = number_by_file(old, files)
         if old:
             title = entry["act_title"] = old["title"]
             with con.cursor() as cur:
                 # the repealing Act (BNS for IPC, …) when we hold it; otherwise linked later (link_repealing_acts)
                 old["replaced_by"] = jb_db.code_for_act(cur, *old["by"]) if old["by"] else None
                 held = jb_db.central_act_by_number(cur, old["number"], old["year"]) if old["number"] else None
+            if held and not _same_title(held["title"], title, None):
+                # one number, two Acts: a wrong number in India Code's title once marked the Coast Guard Act,
+                # 1978 repealed for "The National Highways (Amendment) Act, 1977". The Act we hold stays as it is.
+                print(f"  note       {title}: {old['number']} of {old['year']} is held by another Act "
+                      f"({held['code']}, {held['title'][:60]}); that Act is left as it is")
+                held = None
             if held and held["status"] != "repealed" and not old["says_repealed"]:
                 # India Code lists it among repealed Acts but its title has no repeal note
                 # ("The Tribunals Reforms Act, 2021", in force): the Act we hold is left as it is
@@ -341,6 +375,23 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
                                f"{[(f['name'], round(f['size'] / 1e6)) for f in files][:3]}")
         with con.cursor() as cur:
             saved = jb_db.existing_version(cur, act_id_src)
+        # A repealed Act whose JurisBound code another entry holds: India Code lists some Acts twice ("The
+        # Mirzapur Stone Mahal, Act, 1886" and "The Mirzapur Stone Mahal Act, 1886"), or gives two Acts one
+        # number. The same Act is not saved again; another Act is saved with a code of its own, flagged.
+        clash = None
+        if repealed and not saved and old["number"]:
+            with con.cursor() as cur:
+                clash = jb_db.act_by_code(cur, jb_db.act_code(old["number"], old["year"]))
+            years = [re.findall(r"\b(1[6-9]\d\d|20\d\d)\b", t)[:1] for t in (clash["title"], title)] if clash else []
+            # never the same Act when the years in the names differ (the Standards of Weight and Measures
+            # Acts of 1956 and of 1976)
+            if clash and _same_title(clash["title"], title, None) and years[0] == years[1]:
+                if not dry_run:
+                    with con, con.cursor() as cur:
+                        jb_db.log(cur, run_id, {**entry, "act_id": clash["id"], "status": "unchanged",
+                                                "note": "India Code lists this Act twice; the other entry is saved"})
+                print(f"  unchanged  {title} (India Code lists it twice; the other entry is saved)")
+                return "unchanged"
         # Quick check, no download: India Code lists a fingerprint of each stored file.
         # The same fingerprint as last time means the PDF was not replaced.
         if saved and saved.get("checksum") and saved["checksum"] == chosen.get("checksum") and not force:
@@ -394,7 +445,7 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
         rows = section_rows(groups)
         n_sections = sum(1 for r in rows if r["kind"] == "section")
         n_rules = len(rows) - n_sections
-        notes = []
+        notes = [number_note] if number_note else []
         if not n_sections:
             notes.append("India Code gives no section records; the pipeline must cut sections from the PDF")
         empty = sum(1 for r in rows if not r["body"])
@@ -425,6 +476,10 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
                     notes.append(f"India Code's copy takes over {gz['code']}, loaded earlier from the Gazette of India")
                     print(f"  takes over {gz['code']} ({gz['title']}), loaded earlier from the Gazette of India")
             code = jb_db.act_code(number, year, state, act_id_src)
+            if clash:
+                code += "-X" + jb_db.sha256(act_id_src.encode())[:6].upper()
+                notes.append(f"India Code gives this Act the number of another Act ({number} of {year}, "
+                             f"\"{clash['title'][:80]}\"); saved with a code of its own: check the number in its PDF")
             if other_act:
                 # another Act with the same number on India Code holds that code: this one gets a few
                 # characters of its India Code id (its JurisBound number then ends in U001, …)

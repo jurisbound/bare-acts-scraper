@@ -26,6 +26,7 @@ It **only collects**: the Act record, its section records (when India Code has t
 - **Unchanged Acts are skipped without a download.** India Code lists a fingerprint of each stored PDF, so a run only downloads new or amended Acts.
 - **A newly repealed Act** (India Code moves it from the Acts list to the repealed list) is marked repealed on the row we already hold: same JurisBound number, sections and saved items, no second copy.
 - **The repealing Act** is read from the repealed title ("Rep., Act 45 of 2023") and linked when we hold it; if it is loaded later, the link is made at the end of a later run.
+- **A repealed Act's own number** is read from India Code's title. India Code's titles carry some typos ("The Indian Patents and Designs (Amendment) Act, 1930, 7 of 1938"); the PDF's file name has the number printed in the Act ("A1930-7.pdf": "ACT No. VII OF 1930"). When the two disagree and the file's year is the year in the Act's name (or the next one: an Act passed late in a year is numbered in the next), the file's number is used. An Act in force is never marked repealed because of another Act's number: the titles must match (a typo once marked the Coast Guard Act, 1978 repealed). An Act India Code lists twice is skipped ("listed twice"); two different Acts given one number are both kept, the second with a code of its own and a note to check the number in its PDF.
 - **A changed Act** is saved as a new dated copy and marked for the pipeline. It keeps its JurisBound number, which the database gives from the Act's official number: Hindu Marriage Act, 1955 (Act 25 of 1955) = `JB-ACT-CEN-1955-0025`, Telangana Act 12 of 2019 = `JB-ACT-TS-2019-0012`; an Act without a usable number gets `JB-ACT-…-U001`.
 - **The same state Act listed more than once** (India Code lists some Acts two to four times: an earlier upload, a "(Single Document)" upload, the Malayalam/Hindi text): one Act. The other entries' PDFs are kept as further copies of that Act (not shown; the copy shown stays the same), and an English entry is always the copy shown.
 - **An entry without a PDF** holds only the state's rules, notifications or orders under an Act (mostly a central Act listed under the state), or only a title: logged as "no Act PDF on India Code", not as a failure.
@@ -37,11 +38,11 @@ Every Act of every run is written to `bare_act_load_log` with the status `loaded
 
 | Trigger | What runs |
 |---|---|
-| Weekly, Sundays 22:00 IST | all central Acts |
+| Weekly, Sundays 22:00 IST | all central Acts, and every state's Acts (one job per state, 5 at a time) |
 | Monthly, the 2nd at 00:00 IST | all repealed central Acts |
 | Run workflow, `what = central` | all central Acts (optional `limit`, `dry_run`) |
 | Run workflow, `what = repealed` | all repealed central Acts (saved ones skipped) |
-| Run workflow, `what = states` | `states = all` or names from `states.txt` (comma separated); one job per state, 3 at a time |
+| Run workflow, `what = states` | `states = all` or names from `states.txt` (comma separated); one job per state, 5 at a time |
 
 **Secrets:**
 - `AZURE_KB_DATABASE_URL`: Azure Postgres, login `jb_court`, schema `jb_kb`.
@@ -69,7 +70,7 @@ python load.py --gazette https://egazette.gov.in/WriteReadData/2025/265620.pdf -
 |---|---|
 | `bare-acts/` | the scraper: `india_code.py` (India Code's data service), `jb_db.py` (database and storage), `load.py` (the command) |
 | `storage/` | the shared storage module (Azure Blob Storage, or S3) |
-| `database/` | the Bare Acts tables as created on Azure (for reference; the live database already has them) |
+| `database/` | the Bare Acts tables as created on Azure (for reference; the live database already has them): `01_bare_acts_tables.sql` the tables, `02_act_numbers_official.sql` JurisBound numbers from the official Act number, `03_act_layout.sql` the whole-Act layout column (the court pipeline fills it) |
 
 ## Status (28 October 2026)
 

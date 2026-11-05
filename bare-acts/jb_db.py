@@ -238,11 +238,17 @@ def central_act_by_number(cur, number: int, year: int) -> Optional[dict]:
     """The central Act with this number and year that we hold from India Code's list of Acts
     (not one of the repealed-list rows), if any."""
     cur.execute(
-        """select id, code, status, replaced_by_code from bare_acts
+        """select id, code, status, replaced_by_code, title from bare_acts
             where jurisdiction = 'central' and act_number = %s and act_year = %s
               and coalesce(source_act_id, '') not like 'REPEAL:%%' limit 1""", (number, year))
     row = cur.fetchone()
-    return {"id": row[0], "code": row[1], "status": row[2], "replaced_by": row[3]} if row else None
+    return {"id": row[0], "code": row[1], "status": row[2], "replaced_by": row[3], "title": row[4]} if row else None
+
+
+def act_by_code(cur, code: str) -> Optional[dict]:
+    cur.execute("select id, title, source_act_id from bare_acts where code = %s", (code,))
+    row = cur.fetchone()
+    return {"id": row[0], "title": row[1], "source_act_id": row[2]} if row else None
 
 
 def state_acts_by_number(cur, state_name: str, number: Optional[int], year: Optional[int],
