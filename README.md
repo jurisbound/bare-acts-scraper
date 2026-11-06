@@ -72,34 +72,35 @@ python load.py --gazette https://egazette.gov.in/WriteReadData/2025/265620.pdf -
 | `storage/` | the shared storage module (Azure Blob Storage, or S3) |
 | `database/` | the Bare Acts tables as created on Azure (for reference; the live database already has them): `01_bare_acts_tables.sql` the tables, `02_act_numbers_official.sql` JurisBound numbers from the official Act number, `03_act_layout.sql` the whole-Act layout column (the court pipeline fills it) |
 
-## Status (28 October 2026)
+## Status (6 November 2026)
 
 | What | State |
 |---|---|
-| Central Acts | all 848 collected on 28 Oct (first run from a laptop). The pipeline's `text` and `index` steps still have to run for them |
-| Repealed central Acts | IPC, the Evidence Act and CrPC collected and cut (CrPC from India Code's clean Tripura copy). IPC and the Evidence Act indexed. A full dry run over all ~4,632 was started on 28 Oct (read only); the first real load is the next Sunday run |
-| State Acts | not loaded. A Telangana dry run (2 Acts) passed on GitHub |
-| Workflow | weekly schedule on; Run workflow tested (repealed and Telangana dry runs green) |
+| Central Acts in force | 845 held, collected weekly. Text, sections and page view done in the court pipeline |
+| Repealed central Acts | 4,627 held, checked monthly. Act numbers checked against India Code's PDF file names (14 corrected). 360 through the pipeline's text step, about 4,270 waiting |
+| State and UT Acts | 9,535 held (35 states/UTs with Acts), collected weekly. About 9,500 wait for the pipeline's text step, which a sample test of 260 Acts showed cuts about two in three English Acts reliably |
+| Workflow | weekly (central + states, 5 states at a time) and monthly (repealed) schedules on; Run workflow tested |
+| Old → new section tables | drafts for IPC/CrPC/Evidence Act → BNS/BNSS/BSA, Income-tax 1961 → 2025 and Companies 1956 → 2013, in court-backend; waiting for the JurisBound legal team's check |
 
-## Pending
+The text, sections, page view and search index of every Act are done by the court pipeline: see `BARE_ACTS.md` in `court-pipeline` (setup, splitting the work between people, where the work stands).
 
-1. ~~**Repealed dry run:** check its `FAILED` lines~~ — done 29 Oct: 4,618 read, 11 failed titles fixed (India Code typos "49of 1952", "12 o f 1947", "4 to 1900"; no number in the title → taken from the PDF file name; British Acts with no number get a code like `A1935-XE34DE5`). An Act we hold as in force that is in the repealed list without a repeal note (the Tribunals Reforms Act 2021) is left in force.
-2. **State Acts plan:**
-   - run about 10 Acts each from Telangana, Andhra Pradesh and two more states (Run workflow → `states`, `limit = 10`);
-   - run the pipeline's `text` step;
-   - check the cut sections against the PDFs and improve the cutting (an earlier test cut only 6 of 15 reliably);
-   - then add the states to the weekly schedule and load all 36. Their text and index steps (thousands of PDFs, some needing OCR) should run in the planned Azure pipeline job.
-3. ~~CrPC: find a cleaner PDF~~ — done 29 Oct: India Code's Tripura copy of the central text is used (all 534 sections). The Wealth-tax Act 1957 has no cleaner copy.
-4. **IPC:** fix the s.4 and s.13 headings, which are cut wrongly. Also one duplicate CPC rule.
-5. **Old → new law table:** a draft from the official BPR&D correspondence tables (BNS↔IPC, BNSS↔CrPC, BSA↔Evidence Act), built on the website's side (`court-backend`, Legal data lists). The JurisBound legal team checks it once.
-6. **Friendlier Act codes:** new Acts get codes like `A2017-23`; only the first samples have BNS, CPC… They work, but the page addresses are not friendly.
-7. **Later, if JurisBound wants them:** India Code's Rules, Notifications, Circulars, Regulations and Orders under each Act.
+## Development
+
+Work on the `develop` branch and merge to `main` when a change is tested: the scheduled runs use `main`. Run a change first as a dry run (`--dry-run`, or Run workflow with `dry_run`), then on one state with a `limit`.
+
+## Later (decisions still open)
+
+1. **State rules, notifications and orders:** India Code holds them under many Acts (for example Delhi's Central Sales Tax Rules, 2005). Not collected.
+2. **11 repealed Acts** have no number in their PDF file name, so their number could not be checked that way.
+3. **Regional-language Acts** (Hindi, Odia, Malayalam …) and Hindi copies labelled as English: counted after the pipeline's full run, then decided.
+4. **Friendlier Act codes:** new Acts get codes like `A2017-23`; they work, but page addresses are not friendly.
+5. **Rules, Notifications, Circulars, Regulations and Orders under central Acts**, if JurisBound wants them.
 
 The full JurisBound pending list (website and backend) is in `court-backend/PLATFORM.md` (private repository).
 
 ## Known limits
 
 - **CrPC:** India Code's repealed-list PDF is a poor scan; the saved copy uses India Code's Tripura copy of the same central text instead. A forced reload (`--force`) would bring the poor scan back.
-- **State Acts:** most have no section records, and each state prints differently. In an earlier test of 15 State Acts, sections were cut reliably for only some. The cutting is being improved before all states are loaded.
+- **State Acts:** most have no section records, and each state prints differently. Sections are cut from the PDF by the court pipeline only when the cut passes its checks; poor scans and Hindi-only PDFs keep their whole text and a page view.
 - **Older PDFs print no "As on" date.** The download date is kept in the database but is not shown to users.
 - **Rules, notifications and circulars** made under an Act are not collected.
