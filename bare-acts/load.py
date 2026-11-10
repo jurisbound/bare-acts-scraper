@@ -373,6 +373,16 @@ def load_act(con, run_id: str, act: dict, dry_run: bool, force: bool, skip_saved
         if not chosen:
             raise RuntimeError(f"the Act's PDF is over {MAX_PDF_BYTES // (1024 * 1024)} MB: "
                                f"{[(f['name'], round(f['size'] / 1e6)) for f in files][:3]}")
+        if not old and not _int(ic.field(act, "act_year")):
+            # India Code's entry has no year (seen 8 Nov 2026: a Malayalam-only Kerala entry): it cannot
+            # be given a JurisBound code. Logged like a missing PDF, not a failure, so one such entry no
+            # longer turns the whole run red and stops the repealed step after it.
+            note = "skipped: India Code's entry has no year"
+            if not dry_run:
+                with con, con.cursor() as cur:
+                    jb_db.log(cur, run_id, {**entry, "status": "mismatch", "note": note, "pdf_saved": False})
+            print(f"  no year    {title}: {note}")
+            return "no year on India Code"
         with con.cursor() as cur:
             saved = jb_db.existing_version(cur, act_id_src)
         # A repealed Act whose JurisBound code another entry holds: India Code lists some Acts twice ("The

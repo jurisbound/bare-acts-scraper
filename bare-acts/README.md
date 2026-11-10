@@ -56,7 +56,9 @@ Requests go one at a time with a two-second pause.
 ## Running it again (monthly)
 
 - **Quick check, no download:** India Code lists a fingerprint of each stored PDF. The same fingerprint as last time means the PDF was not replaced: the Act is logged `unchanged`.
+- **Compared with the copy shown.** An Act's main India Code entry is compared with the copy we show (`published`), not with the newest saved copy. Extra copies from other entries (an older upload, the Malayalam/Hindi text) are checked against all kept copies of that Act. Before 10 Nov 2026 the main entry was compared with the newest copy, so every Act with extra copies looked changed and the same PDF was saved again each week (8 Nov run: 413 repeat records, Kerala 153, Assam 91; harmless, left in place).
 - **A changed PDF** is downloaded and saved as a new copy, marked for the pipeline again.
+- **An entry with no year** (a Malayalam-only Kerala entry, 8 Nov 2026) cannot get a JurisBound code: it is logged `mismatch` "skipped: India Code's entry has no year", not `failed`, so it no longer marks the whole run failed and stops the repealed step.
 - **An Act no longer listed** (after a run over a whole list, without `--limit`) gets `source_missing_since` set to the date it was first missed; usually it was repealed.
 
 Log statuses: `loaded`, `unchanged`, `mismatch` (saved, the note says what to look at), `failed` (nothing saved; the note has the error).
