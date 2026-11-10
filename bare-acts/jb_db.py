@@ -223,11 +223,19 @@ def upload_pdf(key: str, data: bytes) -> None:
 
 
 def existing_version(cur, source_act_id: str) -> Optional[dict]:
-    """The newest saved copy of this Act, if any."""
+    """The copy of this Act we show (published), else the newest saved copy, if any.
+
+    The weekly change check compares India Code's PDF with this copy. It must be the copy shown,
+    not simply the newest: an extra copy from another India Code entry of the same Act (an older
+    upload, the Malayalam/Hindi text) is often saved after the shown copy, and comparing with it
+    made every such Act look changed, so the same PDF was saved again each week (8 Nov 2026 run:
+    413 repeat records, Kerala 153, Assam 91)."""
     cur.execute(
         """select v.id, v.consolidated_as_of, v.pdf_sha256, v.pdf_path, v.source_checksum
              from bare_acts a join bare_act_versions v on v.act_id = a.id
-            where a.source_act_id = %s order by v.fetched_at desc nulls last, v.consolidated_as_of desc limit 1""",
+            where a.source_act_id = %s
+            order by (v.status = 'published') desc, v.fetched_at desc nulls last, v.consolidated_as_of desc
+            limit 1""",
         (source_act_id,),
     )
     row = cur.fetchone()
